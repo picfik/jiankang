@@ -1,0 +1,55 @@
+# 部署到 GitHub Pages，并用 OSS AccessKey（存于 Secrets）现场生成预签名 URL 配置
+# 需要在仓库 Settings -> Secrets and variables -> Actions 中配置：
+#   Secrets: OSS_AK_ID（AccessKey ID）、OSS_AK_SECRET（AccessKey Secret）、OSS_BACKUP_KEY（长随机串，如 openssl rand -hex 16 生成）
+#   Variables: OSS_BUCKET（桶名）、OSS_ENDPOINT（如 oss-cn-beijing.aliyuncs.com）
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装 oss2
+        run: pip install oss2
+
+      - name: 生成 OSS 预签名配置 oss-config.js
+        env:
+          OSS_AK_ID: ${{ secrets.OSS_AK_ID }}
+          OSS_AK_SECRET: ${{ secrets.OSS_AK_SECRET }}
+          OSS_BUCKET: ${{ vars.OSS_BUCKET }}
+          OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT }}
+          OSS_BACKUP_KEY: ${{ secrets.OSS_BACKUP_KEY }}
+        run: python scripts/gen_oss_config.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

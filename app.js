@@ -649,10 +649,14 @@ function scheduleAutoUpload() {
 
 /* ---------------- 设置视图 ---------------- */
 function getOSS() {
+  /* 优先用设置页手动保存的 URL；否则用 Actions 部署时自动生成的 oss-config.js */
+  const injected = (typeof window !== 'undefined' && window.OSS_CONFIG) || {};
+  const saved = k => localStorage.getItem(k);
   return {
-    putUrl: localStorage.getItem('oss_put_url') || '',
-    getUrl: localStorage.getItem('oss_get_url') || '',
-    auto: localStorage.getItem('oss_auto') === '1'
+    putUrl: saved('oss_put_url') || injected.putUrl || '',
+    getUrl: saved('oss_get_url') || injected.getUrl || '',
+    /* 自动同步默认值：有注入配置时默认开启；用户手动关过（'0'）则保持关闭 */
+    auto: saved('oss_auto') != null ? saved('oss_auto') === '1' : !!injected.putUrl
   };
 }
 
