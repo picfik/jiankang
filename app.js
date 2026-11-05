@@ -649,14 +649,13 @@ function scheduleAutoUpload() {
 
 /* ---------------- 设置视图 ---------------- */
 function getOSS() {
-  /* 优先用设置页手动保存的 URL；否则用 Actions 部署时自动生成的 oss-config.js */
+  /* 签名 URL 由 GitHub Actions 部署时注入（oss-config.js），不再支持手动填写 */
   const injected = (typeof window !== 'undefined' && window.OSS_CONFIG) || {};
-  const saved = k => localStorage.getItem(k);
   return {
-    putUrl: saved('oss_put_url') || injected.putUrl || '',
-    getUrl: saved('oss_get_url') || injected.getUrl || '',
-    /* 自动同步默认值：有注入配置时默认开启；用户手动关过（'0'）则保持关闭 */
-    auto: saved('oss_auto') != null ? saved('oss_auto') === '1' : !!injected.putUrl
+    putUrl: injected.putUrl || '',
+    getUrl: injected.getUrl || '',
+    /* 用户手动关过（'0'）则保持关闭；有注入配置时默认开启 */
+    auto: localStorage.getItem('oss_auto') != null ? localStorage.getItem('oss_auto') === '1' : !!injected.putUrl
   };
 }
 
@@ -678,18 +677,16 @@ function renderSettings() {
       <p class="hint">导出文件包含全部打卡记录，建议定期备份到网盘。导入时同日期记录会被覆盖。</p>
     </div>
 
-    <div class="section-title">阿里云 OSS 云同步（可选）</div>
+    <div class="section-title">云同步（阿里云 OSS）</div>
     <div class="card">
-      <div class="form-col"><label>PUT 上传签名 URL</label>
-        <input type="text" id="oss-put" placeholder="ossutil 预生成的 PUT 预签名 URL" value="${esc(oss.putUrl)}"></div>
-      <div class="form-col"><label>GET 下载签名 URL</label>
-        <input type="text" id="oss-get" placeholder="ossutil 预生成的 GET 预签名 URL" value="${esc(oss.getUrl)}"></div>
-      <label class="form-row" style="margin-top:12px;cursor:pointer">
+      <p class="hint" style="margin-top:0">${(typeof window !== 'undefined' && window.OSS_CONFIG && window.OSS_CONFIG.putUrl)
+        ? '签名 URL 已由 GitHub Actions 部署时自动注入（10 年有效期），无需手动填写。AccessKey 只存在 GitHub Secrets 中，不会出现在代码或页面上。'
+        : '尚未检测到自动注入的配置：需通过 GitHub Actions 部署本项目（见仓库 .github/workflows/deploy.yml 并配置 Secrets），部署成功后刷新本页即自动就绪。'}</p>
+      <label class="form-row" style="cursor:pointer">
         <input type="checkbox" id="oss-auto" style="width:auto" ${oss.auto ? 'checked' : ''}>
         <span style="font-size:13px">自动同步：打开应用自动拉取云端合并，打卡修改后自动上传</span>
       </label>
-      <p class="hint">Bucket 请保持私有；需在 OSS 控制台为该 Bucket 配置 CORS 规则（允许来源 *，方法 GET/PUT）。签名 URL 可设置 10 年有效期，AccessKey 不会出现在本应用代码中。多设备同时使用时，按记录修改时间合并，不会互相覆盖丢数据。${ossLastSyncText()}</p>
-      <button class="btn-block" data-act="oss-save">保存 URL 与同步设置</button>
+      <p class="hint">多设备同时使用时按记录修改时间合并，不会互相覆盖丢数据。需在 OSS 控制台为 Bucket 配置 CORS（来源 *，方法 GET/PUT）。${ossLastSyncText()}</p>
       <button class="btn-block" data-act="oss-upload">立即上传到云端</button>
       <button class="btn-block" data-act="oss-download">立即从云端合并</button>
     </div>
@@ -731,14 +728,6 @@ document.addEventListener('click', async e => {
   }
 
   if (act === 'pick-import') { $('#import-file').click(); return; }
-
-  if (act === 'oss-save') {
-    localStorage.setItem('oss_put_url', $('#oss-put').value.trim());
-    localStorage.setItem('oss_get_url', $('#oss-get').value.trim());
-    localStorage.setItem('oss_auto', $('#oss-auto').checked ? '1' : '0');
-    toast('已保存，自动同步已' + ($('#oss-auto').checked ? '开启' : '关闭'));
-    return;
-  }
 
   if (act === 'oss-upload') {
     await syncToCloud(false);
@@ -785,6 +774,14 @@ async function importRecords(data) {
   }
   return n;
 }
+
+/* 自动同步开关：勾选即时生效 */
+document.addEventListener('change', e => {
+  if (e.target.id !== 'oss-auto') return;
+  localStorage.setItem('oss_auto', e.target.checked ? '1' : '0');
+  toast('自动同步已' + (e.target.checked ? '开启' : '关闭'));
+  if (e.target.checked) scheduleAutoUpload();
+});
 
 document.addEventListener('change', e => {
   if (e.target.id !== 'import-file' || !e.target.files.length) return;
