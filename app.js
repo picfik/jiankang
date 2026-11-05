@@ -734,7 +734,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 11';
+const APP_VERSION = 'v1.1 · build 12';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -759,25 +759,53 @@ let lastUploadAt = 0;
 let uploadTimer = null;
 let configAdopted = false;   // 本次拉取是否更新了打卡项配置（供界面提示/刷新）
 
-/* 应用云端下发的打卡项配置（运动计划 / 时间轴），返回是否采纳 */
-function adoptConfig(cfg, force) {
+/* 不出现在同步文件中的本机元数据键 */
+const CONFIG_EXCLUDE = ['oss_last_sync', 'oss_auto', 'config_updated_at'];
+
+/* 收集全部本机配置（自动包含今后新增的任何 localStorage 设置项） */
+function configSnapshot() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (CONFIG_EXCLUDE.includes(k)) continue;
+    const raw = localStorage.getItem(k);
+    try { data[k] = JSON.parse(raw); } catch (e) { data[k] = raw; }
+  }
+  return {
+    updatedAt: Number(localStorage.getItem('config_updated_at')) || 1,
+    data
+  };
+}
+
+/* 保存本机配置变更：打时间戳并触发自动上传 */
+function markConfigChanged() {
+  localStorage.setItem('config_updated_at', String(Date.now()));
+  scheduleAutoUpload();
+}
+
+/* 应用云端下发的配置快照，返回是否采纳 */
+function applyConfigSnapshot(cfg, force) {
   if (!cfg) return false;
+  /* 兼容旧格式 { planItems, tlItems } */
+  const data = cfg.data || {
+    ...(Array.isArray(cfg.planItems) ? { plan_items: cfg.planItems } : {}),
+    ...(Array.isArray(cfg.tlItems) ? { tl_items: cfg.tlItems } : {})
+  };
+  const keys = Object.keys(data || {});
+  if (!keys.length) return false;
   const localTs = Number(localStorage.getItem('config_updated_at')) || 0;
   const cloudTs = Number(cfg.updatedAt) || 0;
   if (!force && cloudTs <= localTs) return false;
-  let changed = false;
-  if (Array.isArray(cfg.planItems) && cfg.planItems.length) {
-    localStorage.setItem('plan_items', JSON.stringify(cfg.planItems));
-    PLAN_ITEMS = cfg.planItems;
-    changed = true;
-  }
-  if (Array.isArray(cfg.tlItems) && cfg.tlItems.length) {
-    localStorage.setItem('tl_items', JSON.stringify(cfg.tlItems));
-    TL_ITEMS = cfg.tlItems;
-    changed = true;
-  }
-  if (changed) localStorage.setItem('config_updated_at', String(cloudTs));
-  return changed;
+  keys.forEach(k => {
+    if (CONFIG_EXCLUDE.includes(k)) return;
+    const v = data[k];
+    localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
+  });
+  localStorage.setItem('config_updated_at', String(cloudTs || Date.now()));
+  /* 重新装载内存中的打卡项定义 */
+  PLAN_ITEMS = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
+  TL_ITEMS = loadItems('tl_items', DEFAULT_TL_ITEMS);
+  return true;
 }
 
 /* 从云端拉取并按 updatedAt 合并到本地，返回采用的记录数 */
@@ -788,8 +816,8 @@ async function syncFromCloud() {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const list = Array.isArray(data) ? data : (data && data.records) || [];
-  /* 先同步打卡项配置 */
-  if (data && data.config) configAdopted = adoptConfig(data.config) || configAdopted;
+  /* 先同步全部本机配置 */
+  if (data && data.config) configAdopted = applyConfigSnapshot(data.config) || configAdopted;
   let adopted = 0;
   for (const raw of list) {
     if (!raw || !raw.date) continue;
@@ -914,12 +942,7 @@ function buildExport(all) {
     app: 'health-pwa',
     version: 1,
     exportedAt: new Date().toISOString(),
-    config: {
-      planItems: loadItems('plan_items', DEFAULT_PLAN_ITEMS),
-      tlItems: loadItems('tl_items', DEFAULT_TL_ITEMS),
-      /* 老配置没有时间戳时用 1 兜底，保证其它设备首次会采纳 */
-      updatedAt: Number(localStorage.getItem('config_updated_at')) || 1
-    },
+    config: configSnapshot(),
     records: all
   }, null, 2);
 }
@@ -995,10 +1018,9 @@ document.addEventListener('click', async e => {
       localStorage.setItem('tl_items', JSON.stringify(state.mgTl));
       TL_ITEMS = state.mgTl;
     }
-    localStorage.setItem('config_updated_at', String(Date.now()));
+    markConfigChanged();
     toast('已保存并应用，正在同步到云端');
     renderSettings();
-    scheduleAutoUpload();
     return;
   }
 
@@ -1039,7 +1061,7 @@ document.addEventListener('change', e => {
     try {
       const data = JSON.parse(reader.result);
       if (data && data.config) {
-        adoptConfig({ ...data.config, updatedAt: Date.now() }, true);  // 导入为显式操作，强制应用配置
+        applyConfigSnapshot({ ...data.config, updatedAt: Date.now() }, true);  // 导入为显式操作，强制应用配置
       }
       const n = await importRecords(data);
       toast(`已导入 ${n} 条记录`);
