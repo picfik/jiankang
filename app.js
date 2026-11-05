@@ -29,15 +29,15 @@ const DEFAULT_TL_ITEMS = [
   { key: 'sleep',       name: '睡眠',     type: 'time' }
 ];
 
-/* 每日运动计划：动作 × 时段打卡（core:true 的动作受腰痛红线锁定，可在设置页增删改） */
+/* 每日运动计划：动作 × 自定义次数（slots: [{ id, label }]，次数与标签完全由用户设置） */
 const DEFAULT_PLAN_ITEMS = [
-  { key: 'b8',         name: '八段锦', slots: ['morning', 'noon', 'evening'] },
-  { key: 'deadbug',    name: '死虫式', slots: ['noon', 'evening'], core: true },
-  { key: 'birddog',    name: '鸟狗式', slots: ['noon', 'evening'], core: true },
-  { key: 'bridge',     name: '臀桥',   slots: ['noon', 'evening'], core: true },
-  { key: 'pushup',     name: '俯卧撑', slots: ['noon', 'evening'] },
-  { key: 'squat',      name: '深蹲',   slots: ['noon'] },
-  { key: 'zhanzhuang', name: '站桩',   slots: ['evening'] }
+  { key: 'b8',         name: '八段锦', slots: [{ id: 'morning', label: '早' }, { id: 'noon', label: '中' }, { id: 'evening', label: '晚' }] },
+  { key: 'deadbug',    name: '死虫式', slots: [{ id: 'noon', label: '中' }, { id: 'evening', label: '晚' }], core: true },
+  { key: 'birddog',    name: '鸟狗式', slots: [{ id: 'noon', label: '中' }, { id: 'evening', label: '晚' }], core: true },
+  { key: 'bridge',     name: '臀桥',   slots: [{ id: 'noon', label: '中' }, { id: 'evening', label: '晚' }], core: true },
+  { key: 'pushup',     name: '俯卧撑', slots: [{ id: 'noon', label: '中' }, { id: 'evening', label: '晚' }] },
+  { key: 'squat',      name: '深蹲',   slots: [{ id: 'noon', label: '中' }] },
+  { key: 'zhanzhuang', name: '站桩',   slots: [{ id: 'evening', label: '晚' }] }
 ];
 
 function loadItems(storageKey, defaults) {
@@ -55,16 +55,26 @@ function loadItems(storageKey, defaults) {
       return it;
     });
   }
+  if (storageKey === 'plan_items') {
+    /* 旧版固定时段（字符串）→ 自定义次数对象 */
+    const legacyLabel = { morning: '早', noon: '中', evening: '晚' };
+    list = list.map(it => ({
+      ...it,
+      slots: (it.slots || []).map(s => typeof s === 'string'
+        ? { id: s, label: legacyLabel[s] || s }
+        : s)
+    }));
+  }
   return list;
 }
 
 let TL_ITEMS = loadItems('tl_items', DEFAULT_TL_ITEMS);
 let PLAN_ITEMS = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
-const PLAN_SLOT_LABEL = { morning: '早', noon: '中', evening: '晚' };
 
-function currentPlanSlot() {
+/* 当前时间对应的默认标签，仅用于高亮提示 */
+function currentSlotLabel() {
   const h = new Date().getHours();
-  return h < 11 ? 'morning' : h < 15 ? 'noon' : 'evening';
+  return h < 11 ? '早' : h < 15 ? '中' : '晚';
 }
 
 function planTotalSlots() {
@@ -73,7 +83,7 @@ function planTotalSlots() {
 
 function planDoneSlots(rec) {
   return PLAN_ITEMS.reduce((n, p) =>
-    n + p.slots.filter(s => rec.plan && rec.plan[p.key] && rec.plan[p.key][s]).length, 0);
+    n + p.slots.filter(s => rec.plan && rec.plan[p.key] && rec.plan[p.key][s.id]).length, 0);
 }
 
 /* ---------------- IndexedDB 封装 ---------------- */
@@ -185,7 +195,7 @@ function blankRecord(date) {
   };
   PLAN_ITEMS.forEach(it => {
     rec.plan[it.key] = {};
-    it.slots.forEach(s => { rec.plan[it.key][s] = null; });
+    it.slots.forEach(s => { rec.plan[it.key][s.id] = null; });
   });
   TL_ITEMS.forEach(it => {
     rec.items[it.key] = it.type === 'meal'
@@ -439,14 +449,14 @@ let ORDER = effectiveOrder();
 
 /* 运动计划行 */
 function planRowHTML(rec, p, blocked) {
-  const nowSlot = currentPlanSlot();
+  const nowLabel = currentSlotLabel();
   const st = rec.plan[p.key] || {};
   const cells = p.slots.map(s => {
-    const done = !!st[s];
+    const done = !!st[s.id];
     const lock = p.core && blocked && !done;
-    const now = s === nowSlot;
+    const now = s.label === nowLabel;
     const cls = ['slot-btn', done ? 'on' : '', now ? 'now' : '', lock ? 'lock' : ''].join(' ');
-    return `<button type="button" class="${cls}" data-act="plan-toggle" data-key="${p.key}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}${done ? ' ✓' : ''}</button>`;
+    return `<button type="button" class="${cls}" data-act="plan-toggle" data-key="${p.key}" data-slot="${s.id}">${esc(s.label)}${done ? ' ✓' : ''}</button>`;
   }).join('');
   const rowLock = p.core && blocked;
   return `<div class="plan-row ${rowLock ? 'blocked' : ''}">
@@ -784,7 +794,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 15';
+const APP_VERSION = 'v1.1 · build 16';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -949,6 +959,16 @@ function syncMgNamesFromDom() {
       if (v) item.name = v;
     }
   });
+  /* 同步每次打卡的自定义名称 */
+  document.querySelectorAll('.mg-slot-input').forEach(inp => {
+    const item = mgItem(inp.dataset.ref);
+    if (!item) return;
+    const s = item.slots.find(x => x.id === inp.dataset.slot);
+    if (s) {
+      const v = inp.value.trim();
+      if (v) s.label = v;
+    }
+  });
 }
 
 /* 从编辑态中取出某一项 */
@@ -971,12 +991,16 @@ function mgRowHTML(ref) {
   if (!item) return '';
   const delBtn = `<button type="button" class="mg-del" data-act="mg-del" data-ref="${ref}">×</button>`;
   if (kind === 'plan') {
-    const slotBtn = s =>
-      `<button type="button" class="slot-btn-sm ${item.slots.includes(s) ? 'on' : ''}" data-act="mg-slot" data-ref="${ref}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}</button>`;
+    const slotChips = item.slots.map(s => `
+      <span class="mg-slot">
+        <input type="text" class="mg-slot-input" data-ref="${ref}" data-slot="${s.id}" value="${esc(s.label)}" title="这一次打卡的名称">
+        <button type="button" class="mg-slot-del" data-act="mg-slot-del" data-ref="${ref}" data-slot="${s.id}" title="删除这一次">×</button>
+      </span>`).join('');
     return `<div class="mg-row">
       <input type="text" class="mg-name" data-kind="plan" data-ref="${ref}" value="${esc(item.name)}">
       <span class="mg-ctrls">
-        ${['morning', 'noon', 'evening'].map(slotBtn).join('')}
+        ${slotChips}
+        <button type="button" class="slot-btn-sm" data-act="mg-slot-add" data-ref="${ref}" title="增加一次打卡">+ 次数</button>
         <button type="button" class="slot-btn-sm ${item.core ? 'on' : ''}" data-act="mg-core" data-ref="${ref}" title="核心动作，腰痛红线时锁定">核心</button>
       </span>
       ${mgMoveHTML(ref)}${delBtn}
@@ -1000,10 +1024,10 @@ function renderSettings() {
     <div class="section-title">打卡项目管理</div>
     <div class="card">
       <div id="mg-all">${state.mgOrder.map(mgRowHTML).join('')}</div>
-      <button class="btn-block" data-act="mg-add" data-kind="plan">+ 添加运动动作（早/中/晚）</button>
+      <button class="btn-block" data-act="mg-add" data-kind="plan">+ 添加运动动作</button>
       <button class="btn-block" data-act="mg-add" data-kind="tl">+ 添加打卡项目</button>
       <button class="btn-block btn-primary" data-act="mg-save">保存并应用</button>
-      <p class="hint">列表顺序即打卡页显示顺序，用 ↑↓ 调整。运动动作按早/中/晚时段打卡，勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定；打卡项目可下拉选择类型：文本 / 时点（单个时间）/ 就寝+起床（两个时间）/ 餐食 / 分钟 / 数值。「×」删除（历史数据保留）。</p>
+      <p class="hint">列表顺序即打卡页显示顺序，用 ↑↓ 调整。每个运动动作可自定义打卡次数与名称（如 早/中/晚，或 第1次/第2次，或 10:00/16:00），点「+ 次数」增加、次数框右侧「×」删除；勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定。打卡项目可下拉选择类型：文本 / 时点 / 就寝+起床 / 餐食 / 分钟 / 数值。</p>
     </div>
 
     <div class="section-title">数据备份</div>
@@ -1058,7 +1082,7 @@ document.addEventListener('click', async e => {
     syncMgNamesFromDom();
     const key = 'c' + Date.now();
     if (t.dataset.kind === 'plan') {
-      state.mgPlan.push({ key, name: '新动作', slots: ['noon'], core: false });
+      state.mgPlan.push({ key, name: '新动作', slots: [{ id: 's' + Date.now(), label: '第1次' }], core: false });
       state.mgOrder.push('plan:' + key);
     } else {
       state.mgTl.push({ key, name: '新项目', type: 'custom' });
@@ -1093,13 +1117,23 @@ document.addEventListener('click', async e => {
     return;
   }
 
-  if (act === 'mg-slot') {
+  if (act === 'mg-slot-add') {
     syncMgNamesFromDom();
     const item = mgItem(t.dataset.ref);
     if (!item) return;
-    const s = t.dataset.slot;
-    item.slots = item.slots.includes(s) ? item.slots.filter(x => x !== s) : [...item.slots, s];
-    if (!item.slots.length) item.slots = ['noon'];
+    const n = item.slots.length + 1;
+    item.slots.push({ id: 's' + Date.now(), label: '第' + n + '次' });
+    renderSettings();
+    toast('已增加一次，可修改名称');
+    return;
+  }
+
+  if (act === 'mg-slot-del') {
+    syncMgNamesFromDom();
+    const item = mgItem(t.dataset.ref);
+    if (!item) return;
+    if (item.slots.length <= 1) { toast('至少保留一次'); return; }
+    item.slots = item.slots.filter(x => x.id !== t.dataset.slot);
     renderSettings();
     return;
   }
