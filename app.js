@@ -19,14 +19,14 @@ const STOMACH_OPTS = ['好', '胀', '痛', '反酸'];
 
 /* 时间轴项目定义（可在设置页增删改，自定义项存于 localStorage） */
 const DEFAULT_TL_ITEMS = [
-  { key: 'wake',        name: '起床',     type: 'time' },
+  { key: 'wake',        name: '起床',     type: 'clock' },
   { key: 'breakfast',   name: '早餐',     type: 'meal' },
   { key: 'lunch',       name: '午餐',     type: 'meal' },
   { key: 'dinner',      name: '晚餐',     type: 'meal' },
   { key: 'snack',       name: '加餐',     type: 'meal' },
   { key: 'walk',        name: '快走',     type: 'exercise' },
   { key: 'smoke',       name: '吸烟',     type: 'smoke' },
-  { key: 'sleep',       name: '睡眠',     type: 'sleep' }
+  { key: 'sleep',       name: '睡眠',     type: 'time' }
 ];
 
 /* 每日运动计划：动作 × 时段打卡（core:true 的动作受腰痛红线锁定，可在设置页增删改） */
@@ -41,11 +41,21 @@ const DEFAULT_PLAN_ITEMS = [
 ];
 
 function loadItems(storageKey, defaults) {
+  let list = null;
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
-    if (Array.isArray(saved) && saved.length) return saved;
+    if (Array.isArray(saved) && saved.length) list = saved;
   } catch (e) { /* 忽略损坏的本地配置 */ }
-  return JSON.parse(JSON.stringify(defaults));
+  if (!list) return JSON.parse(JSON.stringify(defaults));
+  if (storageKey === 'tl_items') {
+    /* 旧版类型迁移：起床(single time) → clock；sleep → time（就寝+起床） */
+    list = list.map(it => {
+      if (it.type === 'sleep') return { ...it, type: 'time' };
+      if (it.key === 'wake' && it.type === 'time') return { ...it, type: 'clock' };
+      return it;
+    });
+  }
+  return list;
 }
 
 let TL_ITEMS = loadItems('tl_items', DEFAULT_TL_ITEMS);
@@ -329,7 +339,8 @@ function itemSummary(rec, it) {
   const d = rec.items[it.key];
   if (!d) return '';
   switch (it.type) {
-    case 'time': return d.time ? `✓ ${d.time}` : '';
+    case 'clock': return d.time ? `✓ ${d.time}` : '';
+    case 'time': return (d.bed && d.wake) ? `✓ ${d.bed} → ${d.wake}` : '';
     case 'meal': {
       if (!d.desc && d.stomach == null) return '';
       const s = d.stomach != null ? `胃部：${STOMACH_OPTS[d.stomach]}` : '';
@@ -355,9 +366,15 @@ function itemBodyHTML(rec, it) {
   const d = rec.items[it.key];
   const fillBtn = `<button type="button" class="btn-fill" data-act="fill-last" data-key="${it.key}">一键填上次值</button>`;
   switch (it.type) {
-    case 'time':
-      return `<div class="form-row"><label>起床时间</label>
+    case 'clock':
+      return `<div class="form-row"><label>时点</label>
         <input type="time" data-bind="items.${it.key}.time" value="${esc(d.time)}"></div>${fillBtn}`;
+    case 'time':
+      return `
+        <div class="form-row"><label>就寝时间</label>
+          <input type="time" data-bind="items.${it.key}.bed" value="${esc(d.bed)}"></div>
+        <div class="form-row"><label>起床时间</label>
+          <input type="time" data-bind="items.${it.key}.wake" value="${esc(d.wake)}"></div>${fillBtn}`;
     case 'meal':
       return `
         <div class="form-col"><label>吃了什么</label>
@@ -580,7 +597,8 @@ function markTs(rec, key) {
   let has = false;
   switch (it.type) {
     case 'sleep':   has = !!(d.bed && d.wake); break;
-    case 'time':    has = !!d.time; break;
+    case 'time':    has = !!(d.bed && d.wake); break;
+    case 'clock':   has = !!d.time; break;
     case 'smoke':   has = d.count != null; break;
     case 'meal':    has = !!(d.desc || d.stomach != null); break;
     case 'custom':  has = !!d.desc; break;
@@ -701,6 +719,8 @@ document.addEventListener('click', async e => {
       const it = TL_ITEMS.find(x => x.key === key);
       return key === 'sleep' ? (d.bed && d.wake)
         : key === 'wake' ? d.time
+        : (it && (it.type === 'time' || it.type === 'sleep')) ? (d.bed && d.wake)
+        : (it && it.type === 'clock') ? d.time
         : key === 'smoke' ? d.count != null
         : ['breakfast', 'lunch', 'dinner', 'snack'].includes(key) ? (d.desc || d.stomach != null)
         : (it && it.type === 'custom') ? !!d.desc
@@ -764,7 +784,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 14';
+const APP_VERSION = 'v1.1 · build 15';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -910,11 +930,11 @@ function scheduleAutoUpload() {
 /* 时间轴可选类型 */
 const TL_TYPE_OPTIONS = [
   ['custom', '文本'],
-  ['time', '时间'],
+  ['clock', '时点'],
+  ['time', '就寝+起床'],
   ['meal', '餐食'],
   ['exercise', '分钟'],
-  ['smoke', '数值'],
-  ['sleep', '睡眠']
+  ['smoke', '数值']
 ];
 
 /* 重渲染前把输入框里未保存的名称回写到编辑态，避免丢失 */
@@ -983,7 +1003,7 @@ function renderSettings() {
       <button class="btn-block" data-act="mg-add" data-kind="plan">+ 添加运动动作（早/中/晚）</button>
       <button class="btn-block" data-act="mg-add" data-kind="tl">+ 添加打卡项目</button>
       <button class="btn-block btn-primary" data-act="mg-save">保存并应用</button>
-      <p class="hint">列表顺序即打卡页显示顺序，用 ↑↓ 调整。运动动作按早/中/晚时段打卡，勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定；打卡项目可下拉选择类型：文本/时间/餐食/分钟/数值/睡眠。「×」删除（历史数据保留）。</p>
+      <p class="hint">列表顺序即打卡页显示顺序，用 ↑↓ 调整。运动动作按早/中/晚时段打卡，勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定；打卡项目可下拉选择类型：文本 / 时点（单个时间）/ 就寝+起床（两个时间）/ 餐食 / 分钟 / 数值。「×」删除（历史数据保留）。</p>
     </div>
 
     <div class="section-title">数据备份</div>
