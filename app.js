@@ -224,7 +224,9 @@ function persist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     state.record.updatedAt = Date.now();
-    Store.put(state.record).catch(e => console.error('保存失败', e));
+    Store.put(state.record)
+      .then(() => scheduleAutoUpload())
+      .catch(e => console.error('保存失败', e));
   }, 300);
 }
 
@@ -580,12 +582,85 @@ document.addEventListener('click', e => {
   if (row) location.hash = `#/edit/${row.dataset.date}`;
 });
 
+/* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
+let uploading = false;
+let lastUploadAt = 0;
+let uploadTimer = null;
+
+/* 从云端拉取并按 updatedAt 合并到本地，返回采用的记录数 */
+async function syncFromCloud() {
+  const { getUrl } = getOSS();
+  if (!getUrl) throw new Error('请先填写 GET 签名 URL');
+  const res = await fetch(getUrl);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (data && data.records) || [];
+  let adopted = 0;
+  for (const raw of list) {
+    if (!raw || !raw.date) continue;
+    const cloud = normalize(raw);
+    const local = await Store.get(cloud.date);
+    if (!local || (cloud.updatedAt || 0) > (local.updatedAt || 0)) {
+      await Store.put(cloud);
+      adopted++;
+    }
+  }
+  if (adopted) localStorage.setItem('oss_last_sync', String(Date.now()));
+  return adopted;
+}
+
+/* 把本地全部数据上传到 OSS（整文件覆盖） */
+async function syncToCloud(silent) {
+  const { putUrl } = getOSS();
+  if (!putUrl) { if (!silent) toast('请先填写 PUT 签名 URL'); return; }
+  if (uploading) return;
+  uploading = true;
+  try {
+    const all = await Store.all();
+    const res = await fetch(putUrl, {
+      method: 'PUT',
+      body: buildExport(all)
+      /* 注意：预签名 URL 签名时未含 Content-Type，这里不要额外设置请求头 */
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    localStorage.setItem('oss_last_sync', String(Date.now()));
+    if (!silent) toast(`已上传 ${all.length} 条记录到 OSS`);
+  } catch (err) {
+    if (!silent) {
+      showModal({ title: '上传失败', danger: true, html: esc(err.message) + '<br>请检查 Bucket CORS 配置与 URL 是否过期。' });
+    }
+    console.warn('OSS 上传失败', err);
+  } finally {
+    uploading = false;
+  }
+}
+
+/* 数据变更后自动上传：防抖 8 秒 + 最小间隔 15 秒 */
+function scheduleAutoUpload() {
+  const oss = getOSS();
+  if (!oss.auto || !oss.putUrl) return;
+  clearTimeout(uploadTimer);
+  uploadTimer = setTimeout(() => {
+    if (Date.now() - lastUploadAt < 15000) return;
+    lastUploadAt = Date.now();
+    syncToCloud(true);
+  }, 8000);
+}
+
 /* ---------------- 设置视图 ---------------- */
 function getOSS() {
   return {
     putUrl: localStorage.getItem('oss_put_url') || '',
-    getUrl: localStorage.getItem('oss_get_url') || ''
+    getUrl: localStorage.getItem('oss_get_url') || '',
+    auto: localStorage.getItem('oss_auto') === '1'
   };
+}
+
+function ossLastSyncText() {
+  const t = Number(localStorage.getItem('oss_last_sync')) || 0;
+  if (!t) return '';
+  const d = new Date(t);
+  return `<br>上次同步：${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function renderSettings() {
@@ -605,10 +680,14 @@ function renderSettings() {
         <input type="text" id="oss-put" placeholder="ossutil 预生成的 PUT 预签名 URL" value="${esc(oss.putUrl)}"></div>
       <div class="form-col"><label>GET 下载签名 URL</label>
         <input type="text" id="oss-get" placeholder="ossutil 预生成的 GET 预签名 URL" value="${esc(oss.getUrl)}"></div>
-      <p class="hint">Bucket 请保持私有；需在 OSS 控制台为该 Bucket 配置 CORS 规则（允许来源 *，方法 GET/PUT）。签名 URL 可设置 10 年有效期，AccessKey 不会出现在本应用代码中。</p>
-      <button class="btn-block" data-act="oss-save">保存 URL</button>
-      <button class="btn-block" data-act="oss-upload">同步到云端（上传）</button>
-      <button class="btn-block" data-act="oss-download">从云端恢复（下载）</button>
+      <label class="form-row" style="margin-top:12px;cursor:pointer">
+        <input type="checkbox" id="oss-auto" style="width:auto" ${oss.auto ? 'checked' : ''}>
+        <span style="font-size:13px">自动同步：打开应用自动拉取云端合并，打卡修改后自动上传</span>
+      </label>
+      <p class="hint">Bucket 请保持私有；需在 OSS 控制台为该 Bucket 配置 CORS 规则（允许来源 *，方法 GET/PUT）。签名 URL 可设置 10 年有效期，AccessKey 不会出现在本应用代码中。多设备同时使用时，按记录修改时间合并，不会互相覆盖丢数据。${ossLastSyncText()}</p>
+      <button class="btn-block" data-act="oss-save">保存 URL 与同步设置</button>
+      <button class="btn-block" data-act="oss-upload">立即上传到云端</button>
+      <button class="btn-block" data-act="oss-download">立即从云端合并</button>
     </div>
 
     <div class="section-title">危险区</div>
@@ -652,37 +731,22 @@ document.addEventListener('click', async e => {
   if (act === 'oss-save') {
     localStorage.setItem('oss_put_url', $('#oss-put').value.trim());
     localStorage.setItem('oss_get_url', $('#oss-get').value.trim());
-    toast('URL 已保存到本机');
+    localStorage.setItem('oss_auto', $('#oss-auto').checked ? '1' : '0');
+    toast('已保存，自动同步已' + ($('#oss-auto').checked ? '开启' : '关闭'));
     return;
   }
 
   if (act === 'oss-upload') {
-    const url = getOSS().putUrl;
-    if (!url) { toast('请先填写 PUT 签名 URL'); return; }
-    const all = await Store.all();
-    try {
-      const res = await fetch(url, {
-        method: 'PUT',
-        body: buildExport(all)
-        /* 注意：预签名 URL 签名时未含 Content-Type，这里不要额外设置请求头 */
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      toast(`已上传 ${all.length} 条记录到 OSS`);
-    } catch (err) {
-      showModal({ title: '上传失败', danger: true, html: esc(err.message) + '<br>请检查 Bucket CORS 配置与 URL 是否过期。' });
-    }
+    await syncToCloud(false);
+    renderSettings();
     return;
   }
 
   if (act === 'oss-download') {
-    const url = getOSS().getUrl;
-    if (!url) { toast('请先填写 GET 签名 URL'); return; }
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const n = await importRecords(data);
-      toast(`已从云端恢复 ${n} 条记录`);
+      const n = await syncFromCloud();
+      toast(n ? `已从云端合并 ${n} 条记录` : '本地数据已是最新');
+      render();
     } catch (err) {
       showModal({ title: '下载失败', danger: true, html: esc(err.message) });
     }
@@ -739,6 +803,26 @@ document.addEventListener('change', e => {
 /* ---------------- 启动 ---------------- */
 window.addEventListener('hashchange', render);
 render();
+
+/* 启动时自动同步：拉取云端合并 → 若今日记录被云端更新则刷新视图 → 回传合并结果 */
+(async () => {
+  const oss = getOSS();
+  if (!oss.auto || !oss.getUrl) return;
+  try {
+    const adopted = await syncFromCloud();
+    if (adopted && state.record && ['today', 'edit'].includes(state.view)) {
+      const cur = state.record.date;
+      const latest = await Store.get(cur);
+      if (latest && (latest.updatedAt || 0) > (state.record.updatedAt || 0)) {
+        state.record = normalize(latest);
+        render();
+      }
+    }
+    if (oss.putUrl) await syncToCloud(true);
+  } catch (e) {
+    console.warn('启动自动同步失败', e);
+  }
+})();
 
 /* Service Worker 注册（仅 https / localhost 下生效） */
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
