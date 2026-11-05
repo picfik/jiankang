@@ -709,8 +709,8 @@ async function syncFromCloud() {
 /* 把本地全部数据上传到 OSS（整文件覆盖） */
 async function syncToCloud(silent) {
   const { putUrl } = getOSS();
-  if (!putUrl) { if (!silent) toast('请先填写 PUT 签名 URL'); return; }
-  if (uploading) return;
+  if (!putUrl) { if (!silent) toast('OSS 未配置，无法上传'); return false; }
+  if (uploading) return false;
   uploading = true;
   try {
     const all = await Store.all();
@@ -722,11 +722,13 @@ async function syncToCloud(silent) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     localStorage.setItem('oss_last_sync', String(Date.now()));
     if (!silent) toast(`已上传 ${all.length} 条记录到 OSS`);
+    return true;
   } catch (err) {
     if (!silent) {
-      showModal({ title: '上传失败', danger: true, html: esc(err.message) + '<br>请检查 Bucket CORS 配置与 URL 是否过期。' });
+      showModal({ title: '上传失败', danger: true, html: esc(err.message) + '<br>请检查网络后重试。' });
     }
     console.warn('OSS 上传失败', err);
+    return false;
   } finally {
     uploading = false;
   }
@@ -740,7 +742,7 @@ function scheduleAutoUpload() {
   uploadTimer = setTimeout(() => {
     if (Date.now() - lastUploadAt < 15000) return;
     lastUploadAt = Date.now();
-    syncToCloud(true);
+    syncToCloud(true).then(ok => { if (ok) toast('已自动同步到云端'); });
   }, 8000);
 }
 
@@ -860,13 +862,28 @@ render();
         render();
       }
     }
-    if (oss.putUrl) await syncToCloud(true);
+    const uploaded = await syncToCloud(true);
+    if (adopted > 0) {
+      toast(`已从云端合并 ${adopted} 条记录`);
+    } else if (uploaded) {
+      toast('已自动同步到云端');
+    }
   } catch (e) {
+    toast('云端同步失败，将稍后重试');
     console.warn('启动自动同步失败', e);
+    setTimeout(() => scheduleAutoUpload(), 30000);
   }
 })();
 
 /* Service Worker 注册（仅 https / localhost 下生效） */
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW 注册失败', err));
+
+  /* 新版本 SW 接管页面时自动刷新一次，确保运行最新代码 */
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swRefreshing) return;
+    swRefreshing = true;
+    location.reload();
+  });
 }
