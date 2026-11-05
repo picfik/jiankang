@@ -273,6 +273,20 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   max-width: 80vw;
 }
 
+/* ============ 合并打卡卡片（运动计划 + 时间轴） ============ */
+.combined-card { padding: 2px 14px; }
+.combined-card .tl-item {
+  box-shadow: none;
+  margin: 0;
+  border-radius: 0;
+  background: transparent;
+  border-bottom: 1px dashed var(--line);
+}
+.combined-card .tl-item:last-child { border-bottom: none; }
+.combined-card .tl-item::before { display: none; }
+.combined-card .tl-head { padding: 11px 0; }
+.combined-card .tl-body { padding: 2px 0 12px; }
+
 /* ============ 运动计划 ============ */
 .plan-count { font-size: 12px; font-weight: 600; color: var(--green); margin-left: 6px; }
 .plan-card { padding: 4px 14px; }

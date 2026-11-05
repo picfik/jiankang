@@ -311,6 +311,7 @@ async function render() {
   if (r.view === 'settings') {
     state.mgPlan = null;   // 每次进入设置页重置编辑态，读取已保存配置
     state.mgTl = null;
+    state.mgOrder = null;
     renderSettings();
     return;
   }
@@ -393,27 +394,70 @@ function itemBodyHTML(rec, it) {
   }
 }
 
-function renderPlanHTML(rec) {
+/* ---------------- 统一打卡顺序（运动计划 + 时间轴混排）---------------- */
+function parseRef(r) {
+  const i = r.indexOf(':');
+  return [r.slice(0, i), r.slice(i + 1)];
+}
+
+function refItem(r) {
+  const [kind, key] = parseRef(r);
+  return kind === 'plan'
+    ? PLAN_ITEMS.find(p => p.key === key)
+    : TL_ITEMS.find(t => t.key === key);
+}
+
+/* 已保存顺序过滤失效项 + 追加新增项 */
+function effectiveOrder() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('order_items') || 'null'); } catch (e) { /* ignore */ }
+  const refs = Array.isArray(saved) ? saved.filter(r => refItem(r)) : [];
+  const have = new Set(refs);
+  PLAN_ITEMS.forEach(p => { const r = 'plan:' + p.key; if (!have.has(r)) refs.push(r); });
+  TL_ITEMS.forEach(t => { const r = 'tl:' + t.key; if (!have.has(r)) refs.push(r); });
+  return refs;
+}
+
+let ORDER = effectiveOrder();
+
+/* 运动计划行 */
+function planRowHTML(rec, p, blocked) {
   const nowSlot = currentPlanSlot();
-  const blocked = isCoreBlocked(rec);
-  const rows = PLAN_ITEMS.map(p => {
-    const st = rec.plan[p.key] || {};
-    const cells = p.slots.map(s => {
-      const done = !!st[s];
-      const lock = p.core && blocked && !done;
-      const now = s === nowSlot;
-      const cls = ['slot-btn', done ? 'on' : '', now ? 'now' : '', lock ? 'lock' : ''].join(' ');
-      return `<button type="button" class="${cls}" data-act="plan-toggle" data-key="${p.key}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}${done ? ' ✓' : ''}</button>`;
-    }).join('');
-    const rowLock = p.core && blocked;
-    return `<div class="plan-row ${rowLock ? 'blocked' : ''}">
-      <span class="plan-name">${p.name}${rowLock ? ' <span class="plan-lock-tag">锁定</span>' : ''}</span>
-      <span class="plan-cells">${cells}</span>
-    </div>`;
+  const st = rec.plan[p.key] || {};
+  const cells = p.slots.map(s => {
+    const done = !!st[s];
+    const lock = p.core && blocked && !done;
+    const now = s === nowSlot;
+    const cls = ['slot-btn', done ? 'on' : '', now ? 'now' : '', lock ? 'lock' : ''].join(' ');
+    return `<button type="button" class="${cls}" data-act="plan-toggle" data-key="${p.key}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}${done ? ' ✓' : ''}</button>`;
   }).join('');
+  const rowLock = p.core && blocked;
+  return `<div class="plan-row ${rowLock ? 'blocked' : ''}">
+    <span class="plan-name">${p.name}${rowLock ? ' <span class="plan-lock-tag">锁定</span>' : ''}</span>
+    <span class="plan-cells">${cells}</span>
+  </div>`;
+}
+
+/* 时间轴打卡行 */
+function tlRowHTML(rec, it, blocked) {
+  const has = itemSummary(rec, it) !== '';
+  const isCoreBlockedItem = it.type === 'core' && blocked;
+  const cls = ['tl-item', has ? 'done' : '', isCoreBlockedItem ? 'blocked' : '',
+    state.openItem === it.key ? 'open' : ''].join(' ');
+  const summary = isCoreBlockedItem && !has
+    ? '<span class="tl-summary bad">红线锁定 · 不可打卡</span>'
+    : `<span class="tl-summary ${has ? 'ok' : ''}">${itemSummary(rec, it) || '未打卡'}</span>`;
   return `
-    <div class="timeline-title">运动计划 <span class="plan-count">今日 ${planDoneSlots(rec)}/${planTotalSlots()}</span></div>
-    <div class="card plan-card">${rows}</div>`;
+    <div class="${cls}" data-item="${it.key}">
+      <div class="tl-head" data-act="toggle-item" data-key="${it.key}">
+        <span class="tl-name">${it.name}</span>
+        ${summary}
+        <span class="tl-arrow">▶</span>
+      </div>
+      <div class="tl-body" ${state.openItem === it.key ? '' : 'hidden'}>
+        ${itemBodyHTML(rec, it)}
+      </div>
+    </div>`;
 }
 
 function renderDayView() {
@@ -436,27 +480,13 @@ function renderDayView() {
   const alerts = dayAlerts(rec).map(a =>
     `<div class="alert-bar ${a.level === 'danger' ? 'danger' : 'warn'}">${esc(a.text)}</div>`).join('');
 
-  const timeline = TL_ITEMS.map(it => {
-    const d = rec.items[it.key];
-    const has = itemSummary(rec, it) !== '';
-    const isCoreBlockedItem = it.type === 'core' && blocked;
-    const cls = ['tl-item', has ? 'done' : '', isCoreBlockedItem ? 'blocked' : '',
-      state.openItem === it.key ? 'open' : ''].join(' ');
-    const summary = isCoreBlockedItem && !has
-      ? '<span class="tl-summary bad">红线锁定 · 不可打卡</span>'
-      : `<span class="tl-summary ${has ? 'ok' : ''}">${itemSummary(rec, it) || '未打卡'}</span>`;
-    return `
-      <div class="${cls}" data-item="${it.key}">
-        <span class="tl-dot"></span>
-        <div class="tl-head" data-act="toggle-item" data-key="${it.key}">
-          <span class="tl-name">${it.name}</span>
-          ${summary}
-          <span class="tl-arrow">▶</span>
-        </div>
-        <div class="tl-body" ${state.openItem === it.key ? '' : 'hidden'}>
-          ${itemBodyHTML(rec, it)}
-        </div>
-      </div>`;
+  /* 运动计划与时间轴合并渲染，顺序由统一顺序表决定 */
+  ORDER = effectiveOrder();
+  const combinedRows = ORDER.map(r => {
+    const [kind] = parseRef(r);
+    const it = refItem(r);
+    if (!it) return '';
+    return kind === 'plan' ? planRowHTML(rec, it, blocked) : tlRowHTML(rec, it, blocked);
   }).join('');
 
   $('#app').innerHTML = `
@@ -520,10 +550,10 @@ function renderDayView() {
       </div>
     </div>
 
-    ${renderPlanHTML(rec)}
-
-    <div class="timeline-title">时间轴打卡</div>
-    ${timeline}
+    <div class="timeline-title">打卡与运动
+      <span class="plan-count">运动 ${planDoneSlots(rec)}/${planTotalSlots()}</span>
+    </div>
+    <div class="card combined-card">${combinedRows}</div>
   `;
 }
 
@@ -734,7 +764,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 13';
+const APP_VERSION = 'v1.1 · build 14';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -802,9 +832,10 @@ function applyConfigSnapshot(cfg, force) {
     localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
   });
   localStorage.setItem('config_updated_at', String(cloudTs || Date.now()));
-  /* 重新装载内存中的打卡项定义 */
+  /* 重新装载内存中的打卡项定义与顺序 */
   PLAN_ITEMS = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
   TL_ITEMS = loadItems('tl_items', DEFAULT_TL_ITEMS);
+  ORDER = effectiveOrder();
   return true;
 }
 
@@ -890,45 +921,53 @@ const TL_TYPE_OPTIONS = [
 function syncMgNamesFromDom() {
   document.querySelectorAll('.mg-name').forEach(inp => {
     const kind = inp.dataset.kind;
-    const idx = Number(inp.dataset.idx);
+    const key = parseRef(inp.dataset.ref)[1];
     const list = kind === 'plan' ? state.mgPlan : state.mgTl;
-    if (list && list[idx]) {
+    const item = list && list.find(x => x.key === key);
+    if (item) {
       const v = inp.value.trim();
-      if (v) list[idx].name = v;
+      if (v) item.name = v;
     }
   });
 }
 
-/* 管理界面临时编辑状态 */
-function mgMoveHTML(kind, idx) {
+/* 从编辑态中取出某一项 */
+function mgItem(ref) {
+  const [kind, key] = parseRef(ref);
+  const list = kind === 'plan' ? state.mgPlan : state.mgTl;
+  return list ? list.find(x => x.key === key) : null;
+}
+
+function mgMoveHTML(ref) {
   return `<span class="mg-move-group">
-    <button type="button" class="mg-move" data-act="mg-move" data-kind="${kind}" data-idx="${idx}" data-dir="-1" title="上移">↑</button>
-    <button type="button" class="mg-move" data-act="mg-move" data-kind="${kind}" data-idx="${idx}" data-dir="1" title="下移">↓</button>
+    <button type="button" class="mg-move" data-act="mg-move" data-ref="${ref}" data-dir="-1" title="上移">↑</button>
+    <button type="button" class="mg-move" data-act="mg-move" data-ref="${ref}" data-dir="1" title="下移">↓</button>
   </span>`;
 }
 
-function mgRowPlanHTML(item, idx) {
-  const slotBtn = s =>
-    `<button type="button" class="slot-btn-sm ${item.slots.includes(s) ? 'on' : ''}" data-act="mg-slot" data-idx="${idx}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}</button>`;
+function mgRowHTML(ref) {
+  const [kind] = parseRef(ref);
+  const item = mgItem(ref);
+  if (!item) return '';
+  const delBtn = `<button type="button" class="mg-del" data-act="mg-del" data-ref="${ref}">×</button>`;
+  if (kind === 'plan') {
+    const slotBtn = s =>
+      `<button type="button" class="slot-btn-sm ${item.slots.includes(s) ? 'on' : ''}" data-act="mg-slot" data-ref="${ref}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}</button>`;
+    return `<div class="mg-row">
+      <input type="text" class="mg-name" data-kind="plan" data-ref="${ref}" value="${esc(item.name)}">
+      <span class="mg-ctrls">
+        ${['morning', 'noon', 'evening'].map(slotBtn).join('')}
+        <button type="button" class="slot-btn-sm ${item.core ? 'on' : ''}" data-act="mg-core" data-ref="${ref}" title="核心动作，腰痛红线时锁定">核心</button>
+      </span>
+      ${mgMoveHTML(ref)}${delBtn}
+    </div>`;
+  }
   return `<div class="mg-row">
-    <input type="text" class="mg-name" data-kind="plan" data-idx="${idx}" value="${esc(item.name)}">
-    <span class="mg-ctrls">
-      ${['morning', 'noon', 'evening'].map(slotBtn).join('')}
-      <button type="button" class="slot-btn-sm ${item.core ? 'on' : ''}" data-act="mg-core" data-idx="${idx}" title="核心动作，腰痛红线时锁定">核心</button>
-    </span>
-    ${mgMoveHTML('plan', idx)}
-    <button type="button" class="mg-del" data-act="mg-del" data-kind="plan" data-idx="${idx}">×</button>
-  </div>`;
-}
-
-function mgRowTlHTML(item, idx) {
-  return `<div class="mg-row">
-    <input type="text" class="mg-name" data-kind="tl" data-idx="${idx}" value="${esc(item.name)}">
-    <select class="mg-type-sel" data-idx="${idx}" title="打卡类型">
+    <input type="text" class="mg-name" data-kind="tl" data-ref="${ref}" value="${esc(item.name)}">
+    <select class="mg-type-sel" data-ref="${ref}" title="打卡类型">
       ${TL_TYPE_OPTIONS.map(([v, l]) => `<option value="${v}" ${item.type === v ? 'selected' : ''}>${l}</option>`).join('')}
     </select>
-    ${mgMoveHTML('tl', idx)}
-    <button type="button" class="mg-del" data-act="mg-del" data-kind="tl" data-idx="${idx}">×</button>
+    ${mgMoveHTML(ref)}${delBtn}
   </div>`;
 }
 
@@ -936,21 +975,15 @@ function renderSettings() {
   /* 仅在进入设置页时初始化编辑态，重渲染时保留未保存的改动 */
   if (!state.mgPlan) state.mgPlan = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
   if (!state.mgTl) state.mgTl = loadItems('tl_items', DEFAULT_TL_ITEMS);
+  if (!state.mgOrder) state.mgOrder = effectiveOrder();
   $('#app').innerHTML = `
-    <div class="section-title">运动计划管理（动作 × 时段）</div>
+    <div class="section-title">打卡项目管理</div>
     <div class="card">
-      <div id="mg-plan">${state.mgPlan.map((p, i) => mgRowPlanHTML(p, i)).join('')}</div>
-      <button class="btn-block" data-act="mg-add" data-kind="plan">+ 添加动作</button>
-      <button class="btn-block btn-primary" data-act="mg-save" data-kind="plan">保存并应用到打卡页</button>
-      <p class="hint">时段划分：早 5–11 点、中 11–15 点、晚 15 点后。勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定。↑↓ 调整显示顺序，「×」删除（历史数据保留）。</p>
-    </div>
-
-    <div class="section-title">时间轴项目管理</div>
-    <div class="card">
-      <div id="mg-tl">${state.mgTl.map((t, i) => mgRowTlHTML(t, i)).join('')}</div>
-      <button class="btn-block" data-act="mg-add" data-kind="tl">+ 添加项目</button>
-      <button class="btn-block btn-primary" data-act="mg-save" data-kind="tl">保存并应用到打卡页</button>
-      <p class="hint">下拉选择打卡类型：文本（填文字）/ 时间（选时点）/ 餐食（描述+胃感）/ 分钟（运动时长）/ 数值（计数）/ 睡眠（就寝起床）。↑↓ 调整打卡页显示顺序。</p>
+      <div id="mg-all">${state.mgOrder.map(mgRowHTML).join('')}</div>
+      <button class="btn-block" data-act="mg-add" data-kind="plan">+ 添加运动动作（早/中/晚）</button>
+      <button class="btn-block" data-act="mg-add" data-kind="tl">+ 添加打卡项目</button>
+      <button class="btn-block btn-primary" data-act="mg-save">保存并应用</button>
+      <p class="hint">列表顺序即打卡页显示顺序，用 ↑↓ 调整。运动动作按早/中/晚时段打卡，勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定；打卡项目可下拉选择类型：文本/时间/餐食/分钟/数值/睡眠。「×」删除（历史数据保留）。</p>
     </div>
 
     <div class="section-title">数据备份</div>
@@ -1000,13 +1033,16 @@ document.addEventListener('click', async e => {
 
   if (act === 'pick-import') { $('#import-file').click(); return; }
 
-  /* ---- 打卡项管理（运动计划 / 时间轴）---- */
+  /* ---- 打卡项目管理（运动计划 + 打卡项统一管理）---- */
   if (act === 'mg-add') {
     syncMgNamesFromDom();
+    const key = 'c' + Date.now();
     if (t.dataset.kind === 'plan') {
-      state.mgPlan.push({ key: 'c' + Date.now(), name: '新动作', slots: ['noon'], core: false });
+      state.mgPlan.push({ key, name: '新动作', slots: ['noon'], core: false });
+      state.mgOrder.push('plan:' + key);
     } else {
-      state.mgTl.push({ key: 'c' + Date.now(), name: '新项目', type: 'custom' });
+      state.mgTl.push({ key, name: '新项目', type: 'custom' });
+      state.mgOrder.push('tl:' + key);
     }
     renderSettings();
     toast('已添加，改完记得点保存');
@@ -1015,28 +1051,32 @@ document.addEventListener('click', async e => {
 
   if (act === 'mg-del') {
     syncMgNamesFromDom();
-    const idx = Number(t.dataset.idx);
-    const list = t.dataset.kind === 'plan' ? state.mgPlan : state.mgTl;
+    const ref = t.dataset.ref;
+    const [kind, key] = parseRef(ref);
+    const list = kind === 'plan' ? state.mgPlan : state.mgTl;
     if (list.length <= 1) { toast('至少保留一项'); return; }
-    list.splice(idx, 1);
+    state.mgOrder = state.mgOrder.filter(r => r !== ref);
+    const i = list.findIndex(x => x.key === key);
+    if (i >= 0) list.splice(i, 1);
     renderSettings();
     return;
   }
 
   if (act === 'mg-move') {
     syncMgNamesFromDom();
-    const list = t.dataset.kind === 'plan' ? state.mgPlan : state.mgTl;
-    const i = Number(t.dataset.idx);
+    const ref = t.dataset.ref;
+    const i = state.mgOrder.indexOf(ref);
     const j = i + Number(t.dataset.dir);
-    if (j < 0 || j >= list.length) return;
-    [list[i], list[j]] = [list[j], list[i]];
+    if (i < 0 || j < 0 || j >= state.mgOrder.length) return;
+    [state.mgOrder[i], state.mgOrder[j]] = [state.mgOrder[j], state.mgOrder[i]];
     renderSettings();
     return;
   }
 
   if (act === 'mg-slot') {
     syncMgNamesFromDom();
-    const item = state.mgPlan[Number(t.dataset.idx)];
+    const item = mgItem(t.dataset.ref);
+    if (!item) return;
     const s = t.dataset.slot;
     item.slots = item.slots.includes(s) ? item.slots.filter(x => x !== s) : [...item.slots, s];
     if (!item.slots.length) item.slots = ['noon'];
@@ -1046,26 +1086,21 @@ document.addEventListener('click', async e => {
 
   if (act === 'mg-core') {
     syncMgNamesFromDom();
-    const item = state.mgPlan[Number(t.dataset.idx)];
+    const item = mgItem(t.dataset.ref);
+    if (!item) return;
     item.core = !item.core;
     renderSettings();
     return;
   }
 
   if (act === 'mg-save') {
-    const kind = t.dataset.kind;
-    document.querySelectorAll(`.mg-name[data-kind="${kind}"]`).forEach(inp => {
-      const idx = Number(inp.dataset.idx);
-      const name = inp.value.trim();
-      if (name) (kind === 'plan' ? state.mgPlan : state.mgTl)[idx].name = name;
-    });
-    if (kind === 'plan') {
-      localStorage.setItem('plan_items', JSON.stringify(state.mgPlan));
-      PLAN_ITEMS = state.mgPlan;
-    } else {
-      localStorage.setItem('tl_items', JSON.stringify(state.mgTl));
-      TL_ITEMS = state.mgTl;
-    }
+    syncMgNamesFromDom();
+    localStorage.setItem('plan_items', JSON.stringify(state.mgPlan));
+    localStorage.setItem('tl_items', JSON.stringify(state.mgTl));
+    localStorage.setItem('order_items', JSON.stringify(state.mgOrder));
+    PLAN_ITEMS = state.mgPlan;
+    TL_ITEMS = state.mgTl;
+    ORDER = effectiveOrder();
     markConfigChanged();
     toast('已保存并应用，正在同步到云端');
     renderSettings();
@@ -1102,11 +1137,11 @@ async function importRecords(data) {
 }
 
 document.addEventListener('change', e => {
-  /* 时间轴打卡类型切换 */
+  /* 打卡项目类型切换 */
   if (e.target.classList.contains('mg-type-sel')) {
-    const idx = Number(e.target.dataset.idx);
-    if (state.mgTl && state.mgTl[idx]) {
-      state.mgTl[idx].type = e.target.value;
+    const item = mgItem(e.target.dataset.ref);
+    if (item) {
+      item.type = e.target.value;
       toast('已切换类型，保存后生效');
     }
     return;
