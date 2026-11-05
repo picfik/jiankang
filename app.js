@@ -734,7 +734,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 12';
+const APP_VERSION = 'v1.1 · build 13';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -876,7 +876,37 @@ function scheduleAutoUpload() {
 
 /* ---------------- 设置视图 ---------------- */
 
+/* 时间轴可选类型 */
+const TL_TYPE_OPTIONS = [
+  ['custom', '文本'],
+  ['time', '时间'],
+  ['meal', '餐食'],
+  ['exercise', '分钟'],
+  ['smoke', '数值'],
+  ['sleep', '睡眠']
+];
+
+/* 重渲染前把输入框里未保存的名称回写到编辑态，避免丢失 */
+function syncMgNamesFromDom() {
+  document.querySelectorAll('.mg-name').forEach(inp => {
+    const kind = inp.dataset.kind;
+    const idx = Number(inp.dataset.idx);
+    const list = kind === 'plan' ? state.mgPlan : state.mgTl;
+    if (list && list[idx]) {
+      const v = inp.value.trim();
+      if (v) list[idx].name = v;
+    }
+  });
+}
+
 /* 管理界面临时编辑状态 */
+function mgMoveHTML(kind, idx) {
+  return `<span class="mg-move-group">
+    <button type="button" class="mg-move" data-act="mg-move" data-kind="${kind}" data-idx="${idx}" data-dir="-1" title="上移">↑</button>
+    <button type="button" class="mg-move" data-act="mg-move" data-kind="${kind}" data-idx="${idx}" data-dir="1" title="下移">↓</button>
+  </span>`;
+}
+
 function mgRowPlanHTML(item, idx) {
   const slotBtn = s =>
     `<button type="button" class="slot-btn-sm ${item.slots.includes(s) ? 'on' : ''}" data-act="mg-slot" data-idx="${idx}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}</button>`;
@@ -886,15 +916,18 @@ function mgRowPlanHTML(item, idx) {
       ${['morning', 'noon', 'evening'].map(slotBtn).join('')}
       <button type="button" class="slot-btn-sm ${item.core ? 'on' : ''}" data-act="mg-core" data-idx="${idx}" title="核心动作，腰痛红线时锁定">核心</button>
     </span>
+    ${mgMoveHTML('plan', idx)}
     <button type="button" class="mg-del" data-act="mg-del" data-kind="plan" data-idx="${idx}">×</button>
   </div>`;
 }
 
 function mgRowTlHTML(item, idx) {
-  const typeLabels = { time: '时间', meal: '餐食', exercise: '分钟', core: '分钟', smoke: '数值', sleep: '时间', custom: '文本' };
   return `<div class="mg-row">
     <input type="text" class="mg-name" data-kind="tl" data-idx="${idx}" value="${esc(item.name)}">
-    <span class="mg-ctrls"><span class="mg-type">${typeLabels[item.type] || item.type}</span></span>
+    <select class="mg-type-sel" data-idx="${idx}" title="打卡类型">
+      ${TL_TYPE_OPTIONS.map(([v, l]) => `<option value="${v}" ${item.type === v ? 'selected' : ''}>${l}</option>`).join('')}
+    </select>
+    ${mgMoveHTML('tl', idx)}
     <button type="button" class="mg-del" data-act="mg-del" data-kind="tl" data-idx="${idx}">×</button>
   </div>`;
 }
@@ -909,7 +942,7 @@ function renderSettings() {
       <div id="mg-plan">${state.mgPlan.map((p, i) => mgRowPlanHTML(p, i)).join('')}</div>
       <button class="btn-block" data-act="mg-add" data-kind="plan">+ 添加动作</button>
       <button class="btn-block btn-primary" data-act="mg-save" data-kind="plan">保存并应用到打卡页</button>
-      <p class="hint">时段划分：早 5–11 点、中 11–15 点、晚 15 点后。勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定。「×」删除动作（历史数据保留）。</p>
+      <p class="hint">时段划分：早 5–11 点、中 11–15 点、晚 15 点后。勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定。↑↓ 调整显示顺序，「×」删除（历史数据保留）。</p>
     </div>
 
     <div class="section-title">时间轴项目管理</div>
@@ -917,7 +950,7 @@ function renderSettings() {
       <div id="mg-tl">${state.mgTl.map((t, i) => mgRowTlHTML(t, i)).join('')}</div>
       <button class="btn-block" data-act="mg-add" data-kind="tl">+ 添加项目</button>
       <button class="btn-block btn-primary" data-act="mg-save" data-kind="tl">保存并应用到打卡页</button>
-      <p class="hint">新添加的项目为「文本」类型，在打卡页填写文字即可完成打卡。</p>
+      <p class="hint">下拉选择打卡类型：文本（填文字）/ 时间（选时点）/ 餐食（描述+胃感）/ 分钟（运动时长）/ 数值（计数）/ 睡眠（就寝起床）。↑↓ 调整打卡页显示顺序。</p>
     </div>
 
     <div class="section-title">数据备份</div>
@@ -969,6 +1002,7 @@ document.addEventListener('click', async e => {
 
   /* ---- 打卡项管理（运动计划 / 时间轴）---- */
   if (act === 'mg-add') {
+    syncMgNamesFromDom();
     if (t.dataset.kind === 'plan') {
       state.mgPlan.push({ key: 'c' + Date.now(), name: '新动作', slots: ['noon'], core: false });
     } else {
@@ -980,6 +1014,7 @@ document.addEventListener('click', async e => {
   }
 
   if (act === 'mg-del') {
+    syncMgNamesFromDom();
     const idx = Number(t.dataset.idx);
     const list = t.dataset.kind === 'plan' ? state.mgPlan : state.mgTl;
     if (list.length <= 1) { toast('至少保留一项'); return; }
@@ -988,7 +1023,19 @@ document.addEventListener('click', async e => {
     return;
   }
 
+  if (act === 'mg-move') {
+    syncMgNamesFromDom();
+    const list = t.dataset.kind === 'plan' ? state.mgPlan : state.mgTl;
+    const i = Number(t.dataset.idx);
+    const j = i + Number(t.dataset.dir);
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    renderSettings();
+    return;
+  }
+
   if (act === 'mg-slot') {
+    syncMgNamesFromDom();
     const item = state.mgPlan[Number(t.dataset.idx)];
     const s = t.dataset.slot;
     item.slots = item.slots.includes(s) ? item.slots.filter(x => x !== s) : [...item.slots, s];
@@ -998,6 +1045,7 @@ document.addEventListener('click', async e => {
   }
 
   if (act === 'mg-core') {
+    syncMgNamesFromDom();
     const item = state.mgPlan[Number(t.dataset.idx)];
     item.core = !item.core;
     renderSettings();
@@ -1054,6 +1102,15 @@ async function importRecords(data) {
 }
 
 document.addEventListener('change', e => {
+  /* 时间轴打卡类型切换 */
+  if (e.target.classList.contains('mg-type-sel')) {
+    const idx = Number(e.target.dataset.idx);
+    if (state.mgTl && state.mgTl[idx]) {
+      state.mgTl[idx].type = e.target.value;
+      toast('已切换类型，保存后生效');
+    }
+    return;
+  }
   if (e.target.id !== 'import-file' || !e.target.files.length) return;
   const file = e.target.files[0];
   const reader = new FileReader();
