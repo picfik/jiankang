@@ -17,6 +17,9 @@ def main():
     object_key = f'backup/{key}.json'
 
     auth = oss2.Auth(ak, sk)
+    # endpoint 未带协议时 oss2 默认用 http，会造成 https 页面的混合内容拦截，强制 https
+    if not endpoint.startswith(('http://', 'https://')):
+        endpoint = 'https://' + endpoint
     bucket = oss2.Bucket(auth, endpoint, bucket_name)
 
     expires = 10 * 365 * 24 * 3600  # 10 年有效期
