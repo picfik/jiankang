@@ -301,6 +301,30 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .slot-btn.on { background: var(--green); border-color: var(--green); color: #fff; }
 .slot-btn.lock { opacity: .4; }
 
+/* ============ 打卡项管理（设置页） ============ */
+.mg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.mg-name { flex: 1; min-width: 0; }
+.mg-ctrls { display: flex; gap: 5px; flex-shrink: 0; flex-wrap: wrap; }
+.slot-btn-sm { padding: 5px 9px; font-size: 12px; border-radius: 8px; min-width: 34px; }
+.slot-btn-sm.on { background: var(--green); border-color: var(--green); color: #fff; }
+.mg-type { font-size: 11px; color: var(--text-sub); background: var(--page-bg); padding: 4px 8px; border-radius: 8px; }
+.mg-del {
+  flex-shrink: 0;
+  width: 30px; height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border-color: #f1b0b0;
+  color: var(--red);
+  font-size: 16px;
+  line-height: 1;
+}
+
 /* ============ 底部日期切换（编辑历史时） ============ */
 .date-edit-bar {
   display: flex; align-items: center; justify-content: space-between;

@@ -17,8 +17,8 @@ const RULES = {
 
 const STOMACH_OPTS = ['好', '胀', '痛', '反酸'];
 
-/* 时间轴项目定义 */
-const TL_ITEMS = [
+/* 时间轴项目定义（可在设置页增删改，自定义项存于 localStorage） */
+const DEFAULT_TL_ITEMS = [
   { key: 'wake',        name: '起床',     type: 'time' },
   { key: 'breakfast',   name: '早餐',     type: 'meal' },
   { key: 'lunch',       name: '午餐',     type: 'meal' },
@@ -29,8 +29,8 @@ const TL_ITEMS = [
   { key: 'sleep',       name: '睡眠',     type: 'sleep' }
 ];
 
-/* 每日运动计划：动作 × 时段打卡（core:true 的动作受腰痛红线锁定） */
-const PLAN_ITEMS = [
+/* 每日运动计划：动作 × 时段打卡（core:true 的动作受腰痛红线锁定，可在设置页增删改） */
+const DEFAULT_PLAN_ITEMS = [
   { key: 'b8',         name: '八段锦', slots: ['morning', 'noon', 'evening'] },
   { key: 'deadbug',    name: '死虫式', slots: ['noon', 'evening'], core: true },
   { key: 'birddog',    name: '鸟狗式', slots: ['noon', 'evening'], core: true },
@@ -39,6 +39,17 @@ const PLAN_ITEMS = [
   { key: 'squat',      name: '深蹲',   slots: ['noon'] },
   { key: 'zhanzhuang', name: '站桩',   slots: ['evening'] }
 ];
+
+function loadItems(storageKey, defaults) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (Array.isArray(saved) && saved.length) return saved;
+  } catch (e) { /* 忽略损坏的本地配置 */ }
+  return JSON.parse(JSON.stringify(defaults));
+}
+
+let TL_ITEMS = loadItems('tl_items', DEFAULT_TL_ITEMS);
+let PLAN_ITEMS = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
 const PLAN_SLOT_LABEL = { morning: '早', noon: '中', evening: '晚' };
 
 function currentPlanSlot() {
@@ -158,6 +169,7 @@ function blankRecord(date) {
     knee: { pain: null },                           // 膝盖痛 0-10
     smoke: null,                                    // 吸烟支数
     sleep: { bed: '', wake: '' },                   // 就寝 / 起床时间
+    vitals: { weight: null, sys: null, dia: null, hr: null },  // 体重kg / 收缩压 / 舒张压 / 心率
     items: {},                                      // 时间轴打卡数据，按 key 存
     plan: {}                                        // 运动计划：plan[动作][时段] = 完成时间戳
   };
@@ -185,9 +197,10 @@ function normalize(rec) {
   out.back = { ...base.back, ...(rec.back || {}) };
   out.knee = { ...base.knee, ...(rec.knee || {}) };
   out.sleep = { ...base.sleep, ...(rec.sleep || {}) };
+  out.vitals = { ...base.vitals, ...(rec.vitals || {}) };
   out.items = { ...base.items };
   TL_ITEMS.forEach(it => { out.items[it.key] = { ...base.items[it.key], ...((rec.items || {})[it.key] || {}) }; });
-  out.plan = { ...base.plan };
+  out.plan = { ...(rec.plan || {}), ...base.plan };  // 保留已删除动作的历史数据
   PLAN_ITEMS.forEach(it => {
     out.plan[it.key] = { ...base.plan[it.key], ...((rec.plan || {})[it.key] || {}) };
   });
@@ -240,6 +253,16 @@ function dayAlerts(rec) {
   const hour = new Date().getHours();
   if ((rec.water || 0) < RULES.waterMin && hour >= 20) {
     list.push({ level: 'warn', text: `今日饮水仅 ${rec.water || 0}ml（<1500ml）：肾结石风险，请立即补水至 ${RULES.waterGoal}ml。` });
+  }
+  const v = rec.vitals || {};
+  const sys = Number(v.sys), dia = Number(v.dia), hr = Number(v.hr);
+  if (sys > 160 || dia > 100) {
+    list.push({ level: 'danger', text: `血压 ${sys}/${dia} mmHg 明显偏高（>160/100）：静息 15 分钟后复测，如仍偏高请尽快就医。` });
+  } else if (sys >= 140 || dia >= 90) {
+    list.push({ level: 'warn', text: `血压 ${sys}/${dia} mmHg 偏高（≥140/90）：注意低盐饮食，连续多日偏高请咨询医生。` });
+  }
+  if (hr > 100) {
+    list.push({ level: 'warn', text: `静息心率 ${hr} bpm 偏快（>100）：与熬夜/焦虑/咖啡因有关，持续偏快请就医。` });
   }
   return list;
 }
@@ -309,6 +332,7 @@ function itemSummary(rec, it) {
     case 'exercise': return d.mins ? `✓ ${d.mins} 分钟` : '';
     case 'core': return d.mins ? `✓ ${d.mins} 分钟` : '';
     case 'smoke': return d.count != null ? `✓ ${d.count} 支` : '';
+    case 'custom': return d.desc ? `✓ ${esc(d.desc)}` : '';
     case 'sleep': return (d.bed && d.wake) ? `✓ ${d.bed} → ${d.wake}` : '';
     default: return '';
   }
@@ -349,6 +373,11 @@ function itemBodyHTML(rec, it) {
     case 'smoke':
       return `<div class="form-row"><label>今日支数</label>
         <input type="number" min="0" data-bind="items.${it.key}.count" value="${d.count ?? ''}"></div>${fillBtn}`;
+    case 'custom':
+      return `
+        <div class="form-col"><label>记录内容</label>
+          <textarea data-bind="items.${it.key}.desc" placeholder="${esc(it.name)}打卡记录">${esc(d.desc)}</textarea></div>
+        ${fillBtn}`;
     case 'sleep':
       return `
         <div class="form-row"><label>就寝时间</label>
@@ -395,6 +424,9 @@ function renderDayView() {
   const pain = rec.back.pain == null ? null : Number(rec.back.pain);
   const painCls = pain >= 7 ? 'danger' : pain >= 4 ? 'warn' : '';
   const blocked = isCoreBlocked(rec);
+  const sys = Number(rec.vitals.sys), dia = Number(rec.vitals.dia), hr = Number(rec.vitals.hr);
+  const bpCls = (sys > 160 || dia > 100) ? 'danger-v' : (sys >= 140 || dia >= 90) ? 'warn-v' : '';
+  const hrCls = hr > 100 ? 'warn-v' : '';
 
   const alerts = dayAlerts(rec).map(a =>
     `<div class="alert-bar ${a.level === 'danger' ? 'danger' : 'warn'}">${esc(a.text)}</div>`).join('');
@@ -467,6 +499,16 @@ function renderDayView() {
         <div class="metric-value">${rec.knee.pain == null ? '-' : rec.knee.pain}</div>
         <input type="range" min="0" max="10" step="1" value="${rec.knee.pain == null ? 0 : rec.knee.pain}" data-bind="knee.pain">
       </div>
+      <div class="metric-card span2">
+        <div class="metric-label">体重 / 血压 / 心率</div>
+        <div class="sugar-row">
+          <label>体重 kg<input type="number" step="0.1" min="0" data-bind="vitals.weight" value="${rec.vitals.weight ?? ''}" placeholder="如 76.0"></label>
+          <label>收缩压<input type="number" min="0" class="${bpCls}" data-bind="vitals.sys" value="${rec.vitals.sys ?? ''}" placeholder="高压"></label>
+          <label>舒张压<input type="number" min="0" class="${bpCls}" data-bind="vitals.dia" value="${rec.vitals.dia ?? ''}" placeholder="低压"></label>
+          <label>心率 bpm<input type="number" min="0" class="${hrCls}" data-bind="vitals.hr" value="${rec.vitals.hr ?? ''}" placeholder="如 72"></label>
+        </div>
+        <div class="metric-hint" style="margin-top:6px">血压 ≥140/90 黄色 / >160/100 红色；静息心率 >100 黄色。建议晨起空腹测量</div>
+      </div>
     </div>
 
     ${renderPlanHTML(rec)}
@@ -493,14 +535,18 @@ function getByPath(obj, path) {
 
 /* 打卡内容非空时自动记时间戳 */
 function markTs(rec, key) {
+  const it = TL_ITEMS.find(x => x.key === key);
   const d = rec.items[key];
-  if (!d || d.ts) return;
-  const has = key === 'sleep' ? (d.bed && d.wake)
-    : key === 'wake' ? d.time
-    : key === 'smoke' ? d.count != null
-    : key === 'snack' || ['breakfast', 'lunch', 'dinner'].includes(key)
-      ? (d.desc || d.stomach != null)
-    : d.mins != null;
+  if (!d || !it || d.ts) return;
+  let has = false;
+  switch (it.type) {
+    case 'sleep':   has = !!(d.bed && d.wake); break;
+    case 'time':    has = !!d.time; break;
+    case 'smoke':   has = d.count != null; break;
+    case 'meal':    has = !!(d.desc || d.stomach != null); break;
+    case 'custom':  has = !!d.desc; break;
+    default:        has = d.mins != null;
+  }
   if (has) d.ts = Date.now();
 }
 
@@ -613,10 +659,12 @@ document.addEventListener('click', async e => {
     const prev = all.find(r => {
       const d = r.items[key];
       if (!d) return false;
+      const it = TL_ITEMS.find(x => x.key === key);
       return key === 'sleep' ? (d.bed && d.wake)
         : key === 'wake' ? d.time
         : key === 'smoke' ? d.count != null
         : ['breakfast', 'lunch', 'dinner', 'snack'].includes(key) ? (d.desc || d.stomach != null)
+        : (it && it.type === 'custom') ? !!d.desc
         : d.mins != null;
     });
     if (!prev) { toast('没有找到上次记录'); return; }
@@ -654,6 +702,14 @@ async function renderHistory() {
     if (exMin) chips.push(`<span class="chip">快走 ${exMin}min</span>`);
     const planDone = planDoneSlots(r);
     if (planDone) chips.push(`<span class="chip ${planDone >= planTotalSlots(r) ? 'ok' : ''}">计划 ${planDone}/${planTotalSlots(r)}</span>`);
+    const vv = r.vitals || {};
+    if (vv.weight != null) chips.push(`<span class="chip">体重 ${vv.weight}kg</span>`);
+    if (vv.sys != null && vv.dia != null) {
+      const bpBad = Number(vv.sys) > 160 || Number(vv.dia) > 100;
+      const bpWarn = Number(vv.sys) >= 140 || Number(vv.dia) >= 90;
+      chips.push(`<span class="chip ${bpBad ? 'bad' : bpWarn ? 'warn' : ''}">血压 ${vv.sys}/${vv.dia}</span>`);
+    }
+    if (vv.hr != null) chips.push(`<span class="chip">心率 ${vv.hr}</span>`);
     const blocked = isCoreBlocked(r);
     return `<div class="hist-row" data-act="open-day" data-date="${r.date}">
       <span class="hist-date">${r.date.slice(5)}</span>
@@ -670,13 +726,12 @@ document.addEventListener('click', e => {
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
 function getOSS() {
-  /* 签名 URL 由 GitHub Actions 部署时注入（oss-config.js） */
+  /* 签名 URL 由 GitHub Actions 部署时注入（oss-config.js）；URL 存在即始终自动同步，无开关 */
   const injected = (typeof window !== 'undefined' && window.OSS_CONFIG) || {};
   return {
     putUrl: injected.putUrl || '',
     getUrl: injected.getUrl || '',
-    /* 用户手动关过（'0'）则保持关闭；有注入配置时默认开启 */
-    auto: localStorage.getItem('oss_auto') != null ? localStorage.getItem('oss_auto') === '1' : !!injected.putUrl
+    auto: !!(injected.putUrl && injected.getUrl)
   };
 }
 
@@ -748,9 +803,49 @@ function scheduleAutoUpload() {
 
 /* ---------------- 设置视图 ---------------- */
 
+/* 管理界面临时编辑状态 */
+function mgRowPlanHTML(item, idx) {
+  const slotBtn = s =>
+    `<button type="button" class="slot-btn-sm ${item.slots.includes(s) ? 'on' : ''}" data-act="mg-slot" data-idx="${idx}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}</button>`;
+  return `<div class="mg-row">
+    <input type="text" class="mg-name" data-kind="plan" data-idx="${idx}" value="${esc(item.name)}">
+    <span class="mg-ctrls">
+      ${['morning', 'noon', 'evening'].map(slotBtn).join('')}
+      <button type="button" class="slot-btn-sm ${item.core ? 'on' : ''}" data-act="mg-core" data-idx="${idx}" title="核心动作，腰痛红线时锁定">核心</button>
+    </span>
+    <button type="button" class="mg-del" data-act="mg-del" data-kind="plan" data-idx="${idx}">×</button>
+  </div>`;
+}
+
+function mgRowTlHTML(item, idx) {
+  const typeLabels = { time: '时间', meal: '餐食', exercise: '分钟', core: '分钟', smoke: '数值', sleep: '时间', custom: '文本' };
+  return `<div class="mg-row">
+    <input type="text" class="mg-name" data-kind="tl" data-idx="${idx}" value="${esc(item.name)}">
+    <span class="mg-ctrls"><span class="mg-type">${typeLabels[item.type] || item.type}</span></span>
+    <button type="button" class="mg-del" data-act="mg-del" data-kind="tl" data-idx="${idx}">×</button>
+  </div>`;
+}
+
 function renderSettings() {
-  const oss = getOSS();
+  state.mgPlan = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
+  state.mgTl = loadItems('tl_items', DEFAULT_TL_ITEMS);
   $('#app').innerHTML = `
+    <div class="section-title">运动计划管理（动作 × 时段）</div>
+    <div class="card">
+      <div id="mg-plan">${state.mgPlan.map((p, i) => mgRowPlanHTML(p, i)).join('')}</div>
+      <button class="btn-block" data-act="mg-add" data-kind="plan">+ 添加动作</button>
+      <button class="btn-block btn-primary" data-act="mg-save" data-kind="plan">保存并应用到打卡页</button>
+      <p class="hint">时段划分：早 5–11 点、中 11–15 点、晚 15 点后。勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定。「×」删除动作（历史数据保留）。</p>
+    </div>
+
+    <div class="section-title">时间轴项目管理</div>
+    <div class="card">
+      <div id="mg-tl">${state.mgTl.map((t, i) => mgRowTlHTML(t, i)).join('')}</div>
+      <button class="btn-block" data-act="mg-add" data-kind="tl">+ 添加项目</button>
+      <button class="btn-block btn-primary" data-act="mg-save" data-kind="tl">保存并应用到打卡页</button>
+      <p class="hint">新添加的项目为「文本」类型，在打卡页填写文字即可完成打卡。</p>
+    </div>
+
     <div class="section-title">数据备份</div>
     <div class="card">
       <button class="btn-block btn-primary" data-act="export-json">导出为 JSON 文件</button>
@@ -762,7 +857,7 @@ function renderSettings() {
     <div class="section-title">危险区</div>
     <div class="card">
       <button class="btn-block btn-danger" data-act="clear-data">清空全部数据</button>
-      <p class="hint">应用版本 v1.0 · 数据仅存于本设备与你自己配置的云端，无任何第三方服务器。</p>
+      <p class="hint">应用版本 v1.1 · 数据仅存于本设备与你自己配置的云端，无任何第三方服务器。</p>
     </div>
   `;
 }
@@ -796,6 +891,61 @@ document.addEventListener('click', async e => {
   }
 
   if (act === 'pick-import') { $('#import-file').click(); return; }
+
+  /* ---- 打卡项管理（运动计划 / 时间轴）---- */
+  if (act === 'mg-add') {
+    if (t.dataset.kind === 'plan') {
+      state.mgPlan.push({ key: 'c' + Date.now(), name: '新动作', slots: ['noon'], core: false });
+    } else {
+      state.mgTl.push({ key: 'c' + Date.now(), name: '新项目', type: 'custom' });
+    }
+    renderSettings();
+    return;
+  }
+
+  if (act === 'mg-del') {
+    const idx = Number(t.dataset.idx);
+    const list = t.dataset.kind === 'plan' ? state.mgPlan : state.mgTl;
+    if (list.length <= 1) { toast('至少保留一项'); return; }
+    list.splice(idx, 1);
+    renderSettings();
+    return;
+  }
+
+  if (act === 'mg-slot') {
+    const item = state.mgPlan[Number(t.dataset.idx)];
+    const s = t.dataset.slot;
+    item.slots = item.slots.includes(s) ? item.slots.filter(x => x !== s) : [...item.slots, s];
+    if (!item.slots.length) item.slots = ['noon'];
+    renderSettings();
+    return;
+  }
+
+  if (act === 'mg-core') {
+    const item = state.mgPlan[Number(t.dataset.idx)];
+    item.core = !item.core;
+    renderSettings();
+    return;
+  }
+
+  if (act === 'mg-save') {
+    const kind = t.dataset.kind;
+    document.querySelectorAll(`.mg-name[data-kind="${kind}"]`).forEach(inp => {
+      const idx = Number(inp.dataset.idx);
+      const name = inp.value.trim();
+      if (name) (kind === 'plan' ? state.mgPlan : state.mgTl)[idx].name = name;
+    });
+    if (kind === 'plan') {
+      localStorage.setItem('plan_items', JSON.stringify(state.mgPlan));
+      PLAN_ITEMS = state.mgPlan;
+    } else {
+      localStorage.setItem('tl_items', JSON.stringify(state.mgTl));
+      TL_ITEMS = state.mgTl;
+    }
+    toast('已保存并应用');
+    renderSettings();
+    return;
+  }
 
   if (act === 'clear-data') {
     showModal({
