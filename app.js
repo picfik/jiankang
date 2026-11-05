@@ -734,7 +734,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 10';
+const APP_VERSION = 'v1.1 · build 11';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -757,15 +757,39 @@ function getOSS() {
 let uploading = false;
 let lastUploadAt = 0;
 let uploadTimer = null;
+let configAdopted = false;   // 本次拉取是否更新了打卡项配置（供界面提示/刷新）
+
+/* 应用云端下发的打卡项配置（运动计划 / 时间轴），返回是否采纳 */
+function adoptConfig(cfg, force) {
+  if (!cfg) return false;
+  const localTs = Number(localStorage.getItem('config_updated_at')) || 0;
+  const cloudTs = Number(cfg.updatedAt) || 0;
+  if (!force && cloudTs <= localTs) return false;
+  let changed = false;
+  if (Array.isArray(cfg.planItems) && cfg.planItems.length) {
+    localStorage.setItem('plan_items', JSON.stringify(cfg.planItems));
+    PLAN_ITEMS = cfg.planItems;
+    changed = true;
+  }
+  if (Array.isArray(cfg.tlItems) && cfg.tlItems.length) {
+    localStorage.setItem('tl_items', JSON.stringify(cfg.tlItems));
+    TL_ITEMS = cfg.tlItems;
+    changed = true;
+  }
+  if (changed) localStorage.setItem('config_updated_at', String(cloudTs));
+  return changed;
+}
 
 /* 从云端拉取并按 updatedAt 合并到本地，返回采用的记录数 */
 async function syncFromCloud() {
   const { getUrl } = getOSS();
-  if (!getUrl) throw new Error('请先填写 GET 签名 URL');
+  if (!getUrl) throw new Error('OSS 未配置');
   const res = await fetch(getUrl);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const list = Array.isArray(data) ? data : (data && data.records) || [];
+  /* 先同步打卡项配置 */
+  if (data && data.config) configAdopted = adoptConfig(data.config) || configAdopted;
   let adopted = 0;
   for (const raw of list) {
     if (!raw || !raw.date) continue;
@@ -884,12 +908,18 @@ function renderSettings() {
   `;
 }
 
-/* 导出 JSON */
+/* 导出 JSON（含打卡项配置，换设备可完整恢复） */
 function buildExport(all) {
   return JSON.stringify({
     app: 'health-pwa',
     version: 1,
     exportedAt: new Date().toISOString(),
+    config: {
+      planItems: loadItems('plan_items', DEFAULT_PLAN_ITEMS),
+      tlItems: loadItems('tl_items', DEFAULT_TL_ITEMS),
+      /* 老配置没有时间戳时用 1 兜底，保证其它设备首次会采纳 */
+      updatedAt: Number(localStorage.getItem('config_updated_at')) || 1
+    },
     records: all
   }, null, 2);
 }
@@ -965,8 +995,10 @@ document.addEventListener('click', async e => {
       localStorage.setItem('tl_items', JSON.stringify(state.mgTl));
       TL_ITEMS = state.mgTl;
     }
-    toast('已保存并应用');
+    localStorage.setItem('config_updated_at', String(Date.now()));
+    toast('已保存并应用，正在同步到云端');
     renderSettings();
+    scheduleAutoUpload();
     return;
   }
 
@@ -1006,6 +1038,9 @@ document.addEventListener('change', e => {
   reader.onload = async () => {
     try {
       const data = JSON.parse(reader.result);
+      if (data && data.config) {
+        adoptConfig({ ...data.config, updatedAt: Date.now() }, true);  // 导入为显式操作，强制应用配置
+      }
       const n = await importRecords(data);
       toast(`已导入 ${n} 条记录`);
       render();
@@ -1035,6 +1070,10 @@ render();
         state.record = normalize(latest);
         render();
       }
+    }
+    if (configAdopted) {
+      render();
+      toast('已同步最新打卡项配置');
     }
     const uploaded = await syncToCloud(true);
     if (adopted > 0) {
