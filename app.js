@@ -583,6 +583,17 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
+function getOSS() {
+  /* 签名 URL 由 GitHub Actions 部署时注入（oss-config.js） */
+  const injected = (typeof window !== 'undefined' && window.OSS_CONFIG) || {};
+  return {
+    putUrl: injected.putUrl || '',
+    getUrl: injected.getUrl || '',
+    /* 用户手动关过（'0'）则保持关闭；有注入配置时默认开启 */
+    auto: localStorage.getItem('oss_auto') != null ? localStorage.getItem('oss_auto') === '1' : !!injected.putUrl
+  };
+}
+
 let uploading = false;
 let lastUploadAt = 0;
 let uploadTimer = null;
@@ -648,23 +659,6 @@ function scheduleAutoUpload() {
 }
 
 /* ---------------- 设置视图 ---------------- */
-function getOSS() {
-  /* 签名 URL 由 GitHub Actions 部署时注入（oss-config.js），不再支持手动填写 */
-  const injected = (typeof window !== 'undefined' && window.OSS_CONFIG) || {};
-  return {
-    putUrl: injected.putUrl || '',
-    getUrl: injected.getUrl || '',
-    /* 用户手动关过（'0'）则保持关闭；有注入配置时默认开启 */
-    auto: localStorage.getItem('oss_auto') != null ? localStorage.getItem('oss_auto') === '1' : !!injected.putUrl
-  };
-}
-
-function ossLastSyncText() {
-  const t = Number(localStorage.getItem('oss_last_sync')) || 0;
-  if (!t) return '';
-  const d = new Date(t);
-  return `<br>上次同步：${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 function renderSettings() {
   const oss = getOSS();
@@ -674,21 +668,7 @@ function renderSettings() {
       <button class="btn-block btn-primary" data-act="export-json">导出为 JSON 文件</button>
       <button class="btn-block" data-act="pick-import">从 JSON 文件导入恢复</button>
       <input type="file" id="import-file" accept=".json,application/json" hidden>
-      <p class="hint">导出文件包含全部打卡记录，建议定期备份到网盘。导入时同日期记录会被覆盖。</p>
-    </div>
-
-    <div class="section-title">云同步（阿里云 OSS）</div>
-    <div class="card">
-      <p class="hint" style="margin-top:0">${(typeof window !== 'undefined' && window.OSS_CONFIG && window.OSS_CONFIG.putUrl)
-        ? '签名 URL 已由 GitHub Actions 部署时自动注入（10 年有效期），无需手动填写。AccessKey 只存在 GitHub Secrets 中，不会出现在代码或页面上。'
-        : '尚未检测到自动注入的配置：需通过 GitHub Actions 部署本项目（见仓库 .github/workflows/deploy.yml 并配置 Secrets），部署成功后刷新本页即自动就绪。'}</p>
-      <label class="form-row" style="cursor:pointer">
-        <input type="checkbox" id="oss-auto" style="width:auto" ${oss.auto ? 'checked' : ''}>
-        <span style="font-size:13px">自动同步：打开应用自动拉取云端合并，打卡修改后自动上传</span>
-      </label>
-      <p class="hint">多设备同时使用时按记录修改时间合并，不会互相覆盖丢数据。需在 OSS 控制台为 Bucket 配置 CORS（来源 *，方法 GET/PUT）。${ossLastSyncText()}</p>
-      <button class="btn-block" data-act="oss-upload">立即上传到云端</button>
-      <button class="btn-block" data-act="oss-download">立即从云端合并</button>
+      <p class="hint">打卡数据已自动同步到你的阿里云 OSS（打开应用自动合并云端，修改后自动上传），无需手动操作。导出 JSON 是云端之外的双保险，导入时同日期记录会被覆盖。</p>
     </div>
 
     <div class="section-title">危险区</div>
@@ -729,23 +709,6 @@ document.addEventListener('click', async e => {
 
   if (act === 'pick-import') { $('#import-file').click(); return; }
 
-  if (act === 'oss-upload') {
-    await syncToCloud(false);
-    renderSettings();
-    return;
-  }
-
-  if (act === 'oss-download') {
-    try {
-      const n = await syncFromCloud();
-      toast(n ? `已从云端合并 ${n} 条记录` : '本地数据已是最新');
-      render();
-    } catch (err) {
-      showModal({ title: '下载失败', danger: true, html: esc(err.message) });
-    }
-    return;
-  }
-
   if (act === 'clear-data') {
     showModal({
       title: '确认清空全部数据？',
@@ -774,14 +737,6 @@ async function importRecords(data) {
   }
   return n;
 }
-
-/* 自动同步开关：勾选即时生效 */
-document.addEventListener('change', e => {
-  if (e.target.id !== 'oss-auto') return;
-  localStorage.setItem('oss_auto', e.target.checked ? '1' : '0');
-  toast('自动同步已' + (e.target.checked ? '开启' : '关闭'));
-  if (e.target.checked) scheduleAutoUpload();
-});
 
 document.addEventListener('change', e => {
   if (e.target.id !== 'import-file' || !e.target.files.length) return;
