@@ -457,6 +457,10 @@ function renderDayView() {
   $('#app').innerHTML = `
     ${isEdit ? `<div class="date-edit-bar"><span>正在编辑历史记录：${esc(rec.date)}</span>
       <a href="#/today" style="color:inherit">返回今日</a></div>` : ''}
+    <div class="date-edit-bar sync-bar">
+      <span>云端同步：${esc(syncStatusText())}</span>
+      <span>${APP_VERSION}</span>
+    </div>
     ${alerts}
 
     <div class="metrics">
@@ -725,6 +729,16 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
+const APP_VERSION = 'v1.1 · build 8';
+
+function syncStatusText() {
+  if (!getOSS().putUrl) return '未配置';
+  const t = Number(localStorage.getItem('oss_last_sync')) || 0;
+  if (!t) return '从未同步';
+  const d = new Date(t);
+  return `上次同步 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function getOSS() {
   /* 签名 URL 由 GitHub Actions 部署时注入（oss-config.js）；URL 存在即始终自动同步，无开关 */
   const injected = (typeof window !== 'undefined' && window.OSS_CONFIG) || {};
@@ -1002,6 +1016,7 @@ render();
 (async () => {
   const oss = getOSS();
   if (!oss.auto || !oss.getUrl) return;
+  toast('正在同步云端…');
   try {
     const adopted = await syncFromCloud();
     if (adopted && state.record && ['today', 'edit'].includes(state.view)) {
