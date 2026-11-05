@@ -729,7 +729,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 8';
+const APP_VERSION = 'v1.1 · build 9';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -785,8 +785,10 @@ async function syncToCloud(silent) {
     const all = await Store.all();
     const res = await fetch(putUrl, {
       method: 'PUT',
-      body: buildExport(all)
-      /* 注意：预签名 URL 签名时未含 Content-Type，这里不要额外设置请求头 */
+      /* 用空类型 Blob：浏览器不会自动附加 Content-Type 头，
+         与签名时未含 Content-Type 的预签名 URL 完全匹配（字符串 body 会被浏览器
+         自动加 text/plain 头导致 403 签名错误） */
+      body: new Blob([buildExport(all)])
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     localStorage.setItem('oss_last_sync', String(Date.now()));
