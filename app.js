@@ -308,7 +308,12 @@ async function render() {
   header.textContent = r.view === 'edit' ? `编辑 ${r.date}` : todayKey().replace(/-/g, ' / ');
 
   if (r.view === 'history') { await renderHistory(); return; }
-  if (r.view === 'settings') { renderSettings(); return; }
+  if (r.view === 'settings') {
+    state.mgPlan = null;   // 每次进入设置页重置编辑态，读取已保存配置
+    state.mgTl = null;
+    renderSettings();
+    return;
+  }
 
   // today / edit 共用日视图
   const date = r.view === 'edit' ? r.date : todayKey();
@@ -729,7 +734,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 9';
+const APP_VERSION = 'v1.1 · build 10';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -843,8 +848,9 @@ function mgRowTlHTML(item, idx) {
 }
 
 function renderSettings() {
-  state.mgPlan = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
-  state.mgTl = loadItems('tl_items', DEFAULT_TL_ITEMS);
+  /* 仅在进入设置页时初始化编辑态，重渲染时保留未保存的改动 */
+  if (!state.mgPlan) state.mgPlan = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
+  if (!state.mgTl) state.mgTl = loadItems('tl_items', DEFAULT_TL_ITEMS);
   $('#app').innerHTML = `
     <div class="section-title">运动计划管理（动作 × 时段）</div>
     <div class="card">
@@ -916,6 +922,7 @@ document.addEventListener('click', async e => {
       state.mgTl.push({ key: 'c' + Date.now(), name: '新项目', type: 'custom' });
     }
     renderSettings();
+    toast('已添加，改完记得点保存');
     return;
   }
 

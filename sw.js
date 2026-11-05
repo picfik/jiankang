@@ -2,7 +2,7 @@
  * Service Worker — 静态资源 Cache First 策略
  * 版本号更新（v2、v3…）即可触发旧缓存清理
  * ========================================================= */
-const CACHE_NAME = 'health-pwa-v9';
+const CACHE_NAME = 'health-pwa-v10';
 
 /* 安装时预缓存全部静态资源，保证首次打开后即可完全离线 */
 const PRECACHE_ASSETS = [
