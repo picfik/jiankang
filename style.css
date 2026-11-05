@@ -273,6 +273,34 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   max-width: 80vw;
 }
 
+/* ============ 运动计划 ============ */
+.plan-count { font-size: 12px; font-weight: 600; color: var(--green); margin-left: 6px; }
+.plan-card { padding: 4px 14px; }
+.plan-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.plan-row:last-child { border-bottom: none; }
+.plan-row.blocked .plan-name { color: var(--red); }
+.plan-name { font-weight: 600; font-size: 14px; flex-shrink: 0; }
+.plan-lock-tag {
+  font-size: 10px;
+  background: var(--red-bg);
+  color: var(--red);
+  border-radius: 6px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  font-weight: 600;
+}
+.plan-cells { display: flex; gap: 8px; }
+.slot-btn { padding: 7px 16px; font-size: 13px; border-radius: 10px; min-width: 52px; }
+.slot-btn.now { border-color: var(--green); color: var(--green); font-weight: 600; }
+.slot-btn.on { background: var(--green); border-color: var(--green); color: #fff; }
+.slot-btn.lock { opacity: .4; }
+
 /* ============ 底部日期切换（编辑历史时） ============ */
 .date-edit-bar {
   display: flex; align-items: center; justify-content: space-between;

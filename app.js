@@ -25,11 +25,35 @@ const TL_ITEMS = [
   { key: 'dinner',      name: '晚餐',     type: 'meal' },
   { key: 'snack',       name: '加餐',     type: 'meal' },
   { key: 'walk',        name: '快走',     type: 'exercise' },
-  { key: 'protectBack', name: '护腰训练', type: 'exercise' },
-  { key: 'core',        name: '核心训练', type: 'core' },
   { key: 'smoke',       name: '吸烟',     type: 'smoke' },
   { key: 'sleep',       name: '睡眠',     type: 'sleep' }
 ];
+
+/* 每日运动计划：动作 × 时段打卡（core:true 的动作受腰痛红线锁定） */
+const PLAN_ITEMS = [
+  { key: 'b8',         name: '八段锦', slots: ['morning', 'noon', 'evening'] },
+  { key: 'deadbug',    name: '死虫式', slots: ['noon', 'evening'], core: true },
+  { key: 'birddog',    name: '鸟狗式', slots: ['noon', 'evening'], core: true },
+  { key: 'bridge',     name: '臀桥',   slots: ['noon', 'evening'], core: true },
+  { key: 'pushup',     name: '俯卧撑', slots: ['noon', 'evening'] },
+  { key: 'squat',      name: '深蹲',   slots: ['noon'] },
+  { key: 'zhanzhuang', name: '站桩',   slots: ['evening'] }
+];
+const PLAN_SLOT_LABEL = { morning: '早', noon: '中', evening: '晚' };
+
+function currentPlanSlot() {
+  const h = new Date().getHours();
+  return h < 11 ? 'morning' : h < 15 ? 'noon' : 'evening';
+}
+
+function planTotalSlots() {
+  return PLAN_ITEMS.reduce((n, p) => n + p.slots.length, 0);
+}
+
+function planDoneSlots(rec) {
+  return PLAN_ITEMS.reduce((n, p) =>
+    n + p.slots.filter(s => rec.plan && rec.plan[p.key] && rec.plan[p.key][s]).length, 0);
+}
 
 /* ---------------- IndexedDB 封装 ---------------- */
 const DB = (() => {
@@ -134,8 +158,13 @@ function blankRecord(date) {
     knee: { pain: null },                           // 膝盖痛 0-10
     smoke: null,                                    // 吸烟支数
     sleep: { bed: '', wake: '' },                   // 就寝 / 起床时间
-    items: {}                                       // 时间轴打卡数据，按 key 存
+    items: {},                                      // 时间轴打卡数据，按 key 存
+    plan: {}                                        // 运动计划：plan[动作][时段] = 完成时间戳
   };
+  PLAN_ITEMS.forEach(it => {
+    rec.plan[it.key] = {};
+    it.slots.forEach(s => { rec.plan[it.key][s] = null; });
+  });
   TL_ITEMS.forEach(it => {
     rec.items[it.key] = it.type === 'meal'
       ? { desc: '', stomach: null, ts: null }
@@ -158,6 +187,10 @@ function normalize(rec) {
   out.sleep = { ...base.sleep, ...(rec.sleep || {}) };
   out.items = { ...base.items };
   TL_ITEMS.forEach(it => { out.items[it.key] = { ...base.items[it.key], ...((rec.items || {})[it.key] || {}) }; });
+  out.plan = { ...base.plan };
+  PLAN_ITEMS.forEach(it => {
+    out.plan[it.key] = { ...base.plan[it.key], ...((rec.plan || {})[it.key] || {}) };
+  });
   return out;
 }
 
@@ -326,6 +359,29 @@ function itemBodyHTML(rec, it) {
   }
 }
 
+function renderPlanHTML(rec) {
+  const nowSlot = currentPlanSlot();
+  const blocked = isCoreBlocked(rec);
+  const rows = PLAN_ITEMS.map(p => {
+    const st = rec.plan[p.key] || {};
+    const cells = p.slots.map(s => {
+      const done = !!st[s];
+      const lock = p.core && blocked && !done;
+      const now = s === nowSlot;
+      const cls = ['slot-btn', done ? 'on' : '', now ? 'now' : '', lock ? 'lock' : ''].join(' ');
+      return `<button type="button" class="${cls}" data-act="plan-toggle" data-key="${p.key}" data-slot="${s}">${PLAN_SLOT_LABEL[s]}${done ? ' ✓' : ''}</button>`;
+    }).join('');
+    const rowLock = p.core && blocked;
+    return `<div class="plan-row ${rowLock ? 'blocked' : ''}">
+      <span class="plan-name">${p.name}${rowLock ? ' <span class="plan-lock-tag">锁定</span>' : ''}</span>
+      <span class="plan-cells">${cells}</span>
+    </div>`;
+  }).join('');
+  return `
+    <div class="timeline-title">运动计划 <span class="plan-count">今日 ${planDoneSlots(rec)}/${planTotalSlots()}</span></div>
+    <div class="card plan-card">${rows}</div>`;
+}
+
 function renderDayView() {
   const rec = state.record;
   const isEdit = state.view === 'edit';
@@ -413,6 +469,8 @@ function renderDayView() {
       </div>
     </div>
 
+    ${renderPlanHTML(rec)}
+
     <div class="timeline-title">时间轴打卡</div>
     ${timeline}
   `;
@@ -495,6 +553,32 @@ document.addEventListener('click', async e => {
   }
 
   const act = t.dataset.act;
+
+  /* ★ 运动计划打卡：core 类动作受腰痛红线拦截 */
+  if (act === 'plan-toggle') {
+    const key = t.dataset.key, slot = t.dataset.slot;
+    const item = PLAN_ITEMS.find(x => x.key === key);
+    if (!item || !state.record) return;
+    if (!state.record.plan[key]) state.record.plan[key] = {};
+    const st = state.record.plan[key];
+    if (st[slot]) { delete st[slot]; persist(); renderDayView(); return; }  // 再点一次撤销
+    if (item.core && isCoreBlocked(state.record)) {
+      showModal({
+        title: '腰椎抗议，今日仅限平躺和腹式呼吸',
+        danger: true,
+        html: `当前腰痛评分 <b>${state.record.back.pain ?? 0}/10</b>${state.record.back.numb !== 'none' ? '，且伴有腿麻' : ''}。<br>
+               死虫式、鸟狗式、臀桥等核心动作今日已锁定。<br>
+               八段锦和站桩不受影响，可以照常练习。`,
+        buttons: [{ label: '知道了', cls: 'btn-primary' }]
+      });
+      return;
+    }
+    st[slot] = Date.now();
+    persist();
+    renderDayView();
+    return;
+  }
+
   if (act === 'toggle-item') {
     const key = t.dataset.key;
     /* ★ 红线拦截：腰痛≥7 或有腿麻 → 核心训练打卡弹窗拦截 */
@@ -565,9 +649,11 @@ async function renderHistory() {
       chips.push(`<span class="chip ${bad ? 'bad' : ''}">腰痛 ${r.back.pain}</span>`);
     }
     if (r.smoke != null) chips.push(`<span class="chip">烟 ${r.smoke}支</span>`);
-    const exMin = ['walk', 'protectBack', 'core']
+    const exMin = ['walk']
       .reduce((s, k) => s + (Number(r.items[k] && r.items[k].mins) || 0), 0);
-    if (exMin) chips.push(`<span class="chip">运动 ${exMin}min</span>`);
+    if (exMin) chips.push(`<span class="chip">快走 ${exMin}min</span>`);
+    const planDone = planDoneSlots(r);
+    if (planDone) chips.push(`<span class="chip ${planDone >= planTotalSlots(r) ? 'ok' : ''}">计划 ${planDone}/${planTotalSlots(r)}</span>`);
     const blocked = isCoreBlocked(r);
     return `<div class="hist-row" data-act="open-day" data-date="${r.date}">
       <span class="hist-date">${r.date.slice(5)}</span>
