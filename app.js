@@ -279,7 +279,9 @@ const state = {
   view: 'today',        // today | history | settings | edit
   editDate: null,
   record: null,         // 当前编辑的记录
-  openItem: null        // （保留兼容）
+  openItem: null,       // （保留兼容）
+  histTab: 'list',      // 历史页：list 列表 / trend 趋势
+  trendRange: 30        // 趋势图时间范围（天，0 = 全部）
 };
 
 let saveTimer = null;
@@ -507,13 +509,173 @@ document.addEventListener('click', async e => {
 });
 
 /* ---------------- 历史视图 ---------------- */
+/* 通用 SVG 图表：dates 升序；series [{ name, color, values }]；opts { min, max, marks, bars } */
+function chartSVG(dates, series, opts = {}) {
+  const vals = series.flatMap(s => s.values.filter(v => v != null && !isNaN(v)));
+  if (!vals.length) return '<div class="trend-empty">这段时间还没有数据</div>';
+
+  const W = 340, H = 158, padL = 40, padR = 12, padT = 12, padB = 20;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const span = hi - lo;
+  lo -= span * 0.1;
+  hi += span * 0.1;
+  if (opts.min != null) lo = opts.min;
+  if (opts.max != null) hi = opts.max;
+
+  const N = dates.length;
+  const X = i => padL + (N <= 1 ? iw / 2 : (i / (N - 1)) * iw);
+  const Y = v => padT + ih - ((v - lo) / (hi - lo)) * ih;
+  const fmt = n => String(Math.round(n * 10) / 10);
+
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="trend-svg" role="img">`;
+
+  /* 横向网格 + y 轴刻度 */
+  for (let g = 0; g <= 2; g++) {
+    const v = lo + (hi - lo) * (g / 2);
+    const y = Y(v);
+    s += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="currentColor" stroke-opacity=".12"/>`;
+    s += `<text x="${padL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" class="trend-tick">${fmt(v)}</text>`;
+  }
+
+  /* 阈值参考线 */
+  (opts.marks || []).forEach(m => {
+    if (m.y < lo || m.y > hi) return;
+    const y = Y(m.y);
+    s += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="${m.color}" stroke-width="1" stroke-dasharray="4 3" opacity=".75"/>`;
+    if (m.label) s += `<text x="${W - padR}" y="${(y - 3).toFixed(1)}" text-anchor="end" class="trend-tick" fill="${m.color}">${m.label}</text>`;
+  });
+
+  /* x 轴日期：首 / 中 / 尾 */
+  [0, Math.floor((N - 1) / 2), N - 1]
+    .filter((v, i, a) => v >= 0 && a.indexOf(v) === i)
+    .forEach(i => {
+      s += `<text x="${X(i).toFixed(1)}" y="${H - 5}" text-anchor="middle" class="trend-tick">${dates[i].slice(5)}</text>`;
+    });
+
+  if (opts.bars) {
+    const ser = series[0];
+    const bw = Math.max(3, Math.min(14, (iw / Math.max(N, 1)) * 0.6));
+    ser.values.forEach((v, i) => {
+      if (v == null) return;
+      const y = Y(v), h = padT + ih - y;
+      s += `<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" rx="2" fill="${ser.color}" opacity=".8"><title>${dates[i].slice(5)} ${ser.name}：${v}</title></rect>`;
+    });
+  } else {
+    series.forEach(ser => {
+      let seg = [];
+      const flush = () => {
+        if (seg.length > 1) {
+          s += `<polyline points="${seg.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')}" fill="none" stroke="${ser.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+        }
+        seg.forEach(p => {
+          s += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.6" fill="${ser.color}"><title>${p[2]}</title></circle>`;
+        });
+        seg = [];
+      };
+      ser.values.forEach((v, i) => {
+        if (v == null || isNaN(v)) { flush(); return; }
+        seg.push([X(i), Y(v), `${dates[i].slice(5)} ${ser.name}：${v}`]);
+      });
+      flush();
+    });
+  }
+
+  s += '</svg>';
+  return s;
+}
+
+function trendLegend(items) {
+  return `<span class="trend-legend">${items.map(([c, n]) =>
+    `<span class="lg"><i style="background:${c}"></i>${n}</span>`).join('')}</span>`;
+}
+
+/* 趋势视图：按时间范围取记录并逐项绘图 */
+function renderTrendHTML(all) {
+  const asc = [...all].map(normalize).sort((a, b) => a.date.localeCompare(b.date));
+  const days = Number(state.trendRange) || 0;
+  const recs = days > 0 ? asc.slice(-days) : asc;
+  if (!recs.length) return '<div class="empty-tip">这段时间还没有记录</div>';
+
+  const dates = recs.map(r => r.date);
+
+  const cards = [
+    `<div class="card trend-card">
+      <div class="trend-head">血糖 mmol/L ${trendLegend([['#4f8ef7', '空腹'], ['#f59e0b', '餐后2h']])}</div>
+      ${chartSVG(dates, [
+        { name: '空腹', color: '#4f8ef7', values: recs.map(r => (r.sugar && r.sugar.fasting != null) ? Number(r.sugar.fasting) : null) },
+        { name: '餐后2h', color: '#f59e0b', values: recs.map(r => (r.sugar && r.sugar.postprandial != null) ? Number(r.sugar.postprandial) : null) }
+      ], { min: 0, marks: [{ y: 7.0, color: '#ef4444', label: '空腹红线 7.0' }, { y: 11.1, color: '#ef4444', label: '餐后红线 11.1' }] })}
+    </div>`,
+
+    `<div class="card trend-card">
+      <div class="trend-head">饮水 ml ${trendLegend([['#3b82f6', '每日总量']])}</div>
+      ${chartSVG(dates, [
+        { name: '饮水', color: '#3b82f6', values: recs.map(r => (r.water != null) ? Number(r.water) : null) }
+      ], { min: 0, bars: true, marks: [{ y: RULES.waterGoal, color: '#10b981', label: `目标 ${RULES.waterGoal}` }] })}
+    </div>`,
+
+    `<div class="card trend-card">
+      <div class="trend-head">腰痛 / 膝盖痛（0-10）${trendLegend([['#ef4444', '腰痛'], ['#8b5cf6', '膝盖']])}</div>
+      ${chartSVG(dates, [
+        { name: '腰痛', color: '#ef4444', values: recs.map(r => (r.back.pain != null && r.back.pain !== '') ? Number(r.back.pain) : null) },
+        { name: '膝盖', color: '#8b5cf6', values: recs.map(r => (r.knee.pain != null && r.knee.pain !== '') ? Number(r.knee.pain) : null) }
+      ], { min: 0, max: 10, marks: [{ y: 7, color: '#ef4444', label: '红线 7' }] })}
+    </div>`,
+
+    `<div class="card trend-card">
+      <div class="trend-head">体重 kg ${trendLegend([['#10b981', '体重']])}</div>
+      ${chartSVG(dates, [
+        { name: '体重', color: '#10b981', values: recs.map(r => r.vitals && r.vitals.weight != null ? Number(r.vitals.weight) : null) }
+      ], {})}
+    </div>`,
+
+    `<div class="card trend-card">
+      <div class="trend-head">血压 mmHg ${trendLegend([['#ef4444', '收缩压'], ['#4f8ef7', '舒张压']])}</div>
+      ${chartSVG(dates, [
+        { name: '收缩压', color: '#ef4444', values: recs.map(r => r.vitals && r.vitals.sys != null ? Number(r.vitals.sys) : null) },
+        { name: '舒张压', color: '#4f8ef7', values: recs.map(r => r.vitals && r.vitals.dia != null ? Number(r.vitals.dia) : null) }
+      ], { min: 0, marks: [{ y: 140, color: '#f59e0b', label: '140' }, { y: 90, color: '#f59e0b', label: '90' }] })}
+    </div>`,
+
+    `<div class="card trend-card">
+      <div class="trend-head">静息心率 bpm ${trendLegend([['#f59e0b', '心率']])}</div>
+      ${chartSVG(dates, [
+        { name: '心率', color: '#f59e0b', values: recs.map(r => r.vitals && r.vitals.hr != null ? Number(r.vitals.hr) : null) }
+      ], { min: 0, marks: [{ y: 100, color: '#ef4444', label: '100' }] })}
+    </div>`
+  ];
+
+  return `
+    <div class="trend-toolbar">
+      <select id="trend-range">
+        ${[[7, '近 7 天'], [30, '近 30 天'], [90, '近 90 天'], [0, '全部']].map(([v, l]) =>
+          `<option value="${v}" ${Number(state.trendRange) === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+      <span class="hint-inline">共 ${recs.length} 天记录</span>
+    </div>
+    <div class="trend-list">${cards.join('')}</div>`;
+}
+
 async function renderHistory() {
   const all = (await Store.all()).sort((a, b) => b.date.localeCompare(a.date));
   if (!all.length) {
     $('#app').innerHTML = '<div class="empty-tip">还没有记录，去「今日」打卡吧</div>';
     return;
   }
-  $('#app').innerHTML = all.map(rec => {
+
+  const tabs = `<div class="hist-tabs">
+    <button class="tab ${state.histTab === 'list' ? 'on' : ''}" data-act="hist-tab" data-tab="list">列表</button>
+    <button class="tab ${state.histTab === 'trend' ? 'on' : ''}" data-act="hist-tab" data-tab="trend">趋势</button>
+  </div>`;
+
+  if (state.histTab === 'trend') {
+    $('#app').innerHTML = tabs + renderTrendHTML(all);
+    return;
+  }
+
+  const rows = all.map(rec => {
     const r = normalize(rec);
     const chips = [];
     if (r.sugar.fasting != null) {
@@ -543,15 +705,29 @@ async function renderHistory() {
       <span class="hist-arrow">›</span>
     </div>`;
   }).join('');
+
+  $('#app').innerHTML = tabs + rows;
 }
 
 document.addEventListener('click', e => {
+  const tab = e.target.closest('[data-act="hist-tab"]');
+  if (tab) {
+    state.histTab = tab.dataset.tab;
+    renderHistory();
+    return;
+  }
   const row = e.target.closest('[data-act="open-day"]');
   if (row) location.hash = `#/edit/${row.dataset.date}`;
 });
 
+document.addEventListener('change', e => {
+  if (e.target.id !== 'trend-range') return;
+  state.trendRange = Number(e.target.value);
+  renderHistory();
+});
+
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.2 · build 17';
+const APP_VERSION = 'v1.2 · build 18';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';

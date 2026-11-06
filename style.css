@@ -276,6 +276,63 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 /* ============ 合并打卡卡片（运动计划 + 时间轴） ============ */
 .combined-card { padding: 2px 14px; }
 
+/* ============ 历史趋势图 ============ */
+.hist-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+.hist-tabs .tab {
+  flex: 1;
+  padding: 9px 0;
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-sub);
+  border-radius: 10px;
+}
+.hist-tabs .tab.on {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.trend-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.trend-toolbar select {
+  width: auto;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.hint-inline { font-size: 12px; color: var(--text-sub); }
+.trend-list { display: flex; flex-direction: column; gap: 12px; }
+.trend-card { padding: 12px 12px 8px; }
+.trend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.trend-legend { display: inline-flex; gap: 10px; font-weight: 400; font-size: 11px; color: var(--text-sub); }
+.trend-legend .lg { display: inline-flex; align-items: center; gap: 4px; }
+.trend-legend .lg i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.trend-svg { width: 100%; height: auto; display: block; color: var(--text); }
+.trend-tick { font-size: 9px; fill: var(--text-sub); }
+.trend-empty {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-sub);
+  padding: 26px 0;
+}
+
 /* ============ 待办清单 ============ */
 .todo-row {
   display: flex;
