@@ -15,76 +15,61 @@ const RULES = {
   waterMin: 1500        // 最低饮水量（防肾结石脱水）
 };
 
-const STOMACH_OPTS = ['好', '胀', '痛', '反酸'];
-
-/* 时间轴项目定义（可在设置页增删改，自定义项存于 localStorage） */
-const DEFAULT_TL_ITEMS = [
-  { key: 'wake',        name: '起床',     type: 'clock' },
-  { key: 'breakfast',   name: '早餐',     type: 'meal' },
-  { key: 'lunch',       name: '午餐',     type: 'meal' },
-  { key: 'dinner',      name: '晚餐',     type: 'meal' },
-  { key: 'snack',       name: '加餐',     type: 'meal' },
-  { key: 'walk',        name: '快走',     type: 'exercise' },
-  { key: 'smoke',       name: '吸烟',     type: 'smoke' },
-  { key: 'sleep',       name: '睡眠',     type: 'time' }
+/* 待办事项定义（打勾即完成，可在设置页增删改排序） */
+const DEFAULT_TODO_ITEMS = [
+  { key: 'wake',        name: '起床' },
+  { key: 'breakfast',   name: '早餐' },
+  { key: 'lunch',       name: '午餐' },
+  { key: 'dinner',      name: '晚餐' },
+  { key: 'walk',        name: '快走' },
+  { key: 'b8',          name: '八段锦' },
+  { key: 'deadbug',     name: '死虫式' },
+  { key: 'birddog',     name: '鸟狗式' },
+  { key: 'bridge',      name: '臀桥' },
+  { key: 'pushup',      name: '俯卧撑' },
+  { key: 'squat',       name: '深蹲' },
+  { key: 'zhanzhuang',  name: '站桩' },
+  { key: 'smoke',       name: '吸烟' },
+  { key: 'sleep',       name: '睡眠' }
 ];
 
-/* 每日运动计划：动作 × 自定义次数（slots: [{ id, label }]，次数与标签完全由用户设置） */
-const DEFAULT_PLAN_ITEMS = [
-  { key: 'b8',         name: '八段锦', slots: [{ id: 'morning', label: '早' }, { id: 'noon', label: '中' }, { id: 'evening', label: '晚' }] },
-  { key: 'deadbug',    name: '死虫式', slots: [{ id: 'noon', label: '中' }, { id: 'evening', label: '晚' }], core: true },
-  { key: 'birddog',    name: '鸟狗式', slots: [{ id: 'noon', label: '中' }, { id: 'evening', label: '晚' }], core: true },
-  { key: 'bridge',     name: '臀桥',   slots: [{ id: 'noon', label: '中' }, { id: 'evening', label: '晚' }], core: true },
-  { key: 'pushup',     name: '俯卧撑', slots: [{ id: 'noon', label: '中' }, { id: 'evening', label: '晚' }] },
-  { key: 'squat',      name: '深蹲',   slots: [{ id: 'noon', label: '中' }] },
-  { key: 'zhanzhuang', name: '站桩',   slots: [{ id: 'evening', label: '晚' }] }
-];
-
-function loadItems(storageKey, defaults) {
-  let list = null;
+function loadTodoItems() {
+  let saved = null;
   try {
-    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
-    if (Array.isArray(saved) && saved.length) list = saved;
-  } catch (e) { /* 忽略损坏的本地配置 */ }
-  if (!list) return JSON.parse(JSON.stringify(defaults));
-  if (storageKey === 'tl_items') {
-    /* 旧版类型迁移：起床(single time) → clock；sleep → time（就寝+起床） */
-    list = list.map(it => {
-      if (it.type === 'sleep') return { ...it, type: 'time' };
-      if (it.key === 'wake' && it.type === 'time') return { ...it, type: 'clock' };
-      return it;
-    });
-  }
-  if (storageKey === 'plan_items') {
-    /* 旧版固定时段（字符串）→ 自定义次数对象 */
-    const legacyLabel = { morning: '早', noon: '中', evening: '晚' };
-    list = list.map(it => ({
-      ...it,
-      slots: (it.slots || []).map(s => typeof s === 'string'
-        ? { id: s, label: legacyLabel[s] || s }
-        : s)
-    }));
-  }
-  return list;
+    saved = JSON.parse(localStorage.getItem('todo_items') || 'null');
+    if (Array.isArray(saved) && saved.length) return saved;
+  } catch (e) { /* 忽略损坏配置 */ }
+  /* 旧配置迁移：时间轴 + 运动计划 合并为待办列表（按原顺序表） */
+  try {
+    const tl = JSON.parse(localStorage.getItem('tl_items') || '[]');
+    const plan = JSON.parse(localStorage.getItem('plan_items') || '[]');
+    let order = null;
+    try { order = JSON.parse(localStorage.getItem('order_items') || 'null'); } catch (e) { /* ignore */ }
+    let items = [];
+    if (Array.isArray(order)) {
+      order.forEach(r => {
+        const i = r.indexOf(':');
+        const kind = r.slice(0, i), key = r.slice(i + 1);
+        const src = kind === 'plan' ? plan : tl;
+        const it = Array.isArray(src) && src.find(x => x.key === key);
+        if (it) items.push({ key: it.key, name: it.name });
+      });
+    }
+    if (!items.length) {
+      items = [
+        ...tl.map(t => ({ key: t.key, name: t.name })),
+        ...plan.map(p => ({ key: p.key, name: p.name }))
+      ];
+    }
+    if (items.length) {
+      localStorage.setItem('todo_items', JSON.stringify(items));
+      return items;
+    }
+  } catch (e) { /* ignore */ }
+  return JSON.parse(JSON.stringify(DEFAULT_TODO_ITEMS));
 }
 
-let TL_ITEMS = loadItems('tl_items', DEFAULT_TL_ITEMS);
-let PLAN_ITEMS = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
-
-/* 当前时间对应的默认标签，仅用于高亮提示 */
-function currentSlotLabel() {
-  const h = new Date().getHours();
-  return h < 11 ? '早' : h < 15 ? '中' : '晚';
-}
-
-function planTotalSlots() {
-  return PLAN_ITEMS.reduce((n, p) => n + p.slots.length, 0);
-}
-
-function planDoneSlots(rec) {
-  return PLAN_ITEMS.reduce((n, p) =>
-    n + p.slots.filter(s => rec.plan && rec.plan[p.key] && rec.plan[p.key][s.id]).length, 0);
-}
+let TODO_ITEMS = loadTodoItems();
 
 /* ---------------- IndexedDB 封装 ---------------- */
 const DB = (() => {
@@ -190,22 +175,8 @@ function blankRecord(date) {
     smoke: null,                                    // 吸烟支数
     sleep: { bed: '', wake: '' },                   // 就寝 / 起床时间
     vitals: { weight: null, sys: null, dia: null, hr: null },  // 体重kg / 收缩压 / 舒张压 / 心率
-    items: {},                                      // 时间轴打卡数据，按 key 存
-    plan: {}                                        // 运动计划：plan[动作][时段] = 完成时间戳
+    todo: {}                                        // 待办事项：todo[key] = 完成时间戳
   };
-  PLAN_ITEMS.forEach(it => {
-    rec.plan[it.key] = {};
-    it.slots.forEach(s => { rec.plan[it.key][s.id] = null; });
-  });
-  TL_ITEMS.forEach(it => {
-    rec.items[it.key] = it.type === 'meal'
-      ? { desc: '', stomach: null, ts: null }
-      : (it.type === 'time' || it.type === 'sleep') ? { ts: null, ...(it.type === 'sleep' ? {} : {}) }
-      : { mins: null, ts: null };
-  });
-  rec.items.wake = { time: '', ts: null };
-  rec.items.sleep = { bed: '', wake: '', ts: null };
-  rec.items.smoke = { count: null, ts: null };
   return rec;
 }
 
@@ -218,13 +189,29 @@ function normalize(rec) {
   out.knee = { ...base.knee, ...(rec.knee || {}) };
   out.sleep = { ...base.sleep, ...(rec.sleep || {}) };
   out.vitals = { ...base.vitals, ...(rec.vitals || {}) };
-  out.items = { ...base.items };
-  TL_ITEMS.forEach(it => { out.items[it.key] = { ...base.items[it.key], ...((rec.items || {})[it.key] || {}) }; });
-  out.plan = { ...(rec.plan || {}), ...base.plan };  // 保留已删除动作的历史数据
-  PLAN_ITEMS.forEach(it => {
-    out.plan[it.key] = { ...base.plan[it.key], ...((rec.plan || {})[it.key] || {}) };
-  });
+  out.todo = { ...(rec.todo || {}) };
   return out;
+}
+
+/* 某条待办在旧数据模型下的完成时间（计划任一时段 / 时间轴有内容），返回 0 表示未完成 */
+function legacyDoneTs(rec, key) {
+  const p = rec.plan && rec.plan[key];
+  if (p) {
+    const ts = Object.values(p).filter(Boolean);
+    if (ts.length) return Math.max(...ts);
+  }
+  const d = rec.items && rec.items[key];
+  if (d && (d.ts || d.desc || d.mins != null || d.count != null || d.time)) return d.ts || 0;
+  return 0;
+}
+
+function todoDoneTs(rec, key) {
+  if (rec.todo && rec.todo[key]) return rec.todo[key];
+  return legacyDoneTs(rec, key);
+}
+
+function todoDoneCount(rec) {
+  return TODO_ITEMS.filter(it => todoDoneTs(rec, it.key)).length;
 }
 
 /* ---------------- 红线规则引擎 ---------------- */
@@ -292,7 +279,7 @@ const state = {
   view: 'today',        // today | history | settings | edit
   editDate: null,
   record: null,         // 当前编辑的记录
-  openItem: null        // 当前展开的时间轴项 key
+  openItem: null        // （保留兼容）
 };
 
 let saveTimer = null;
@@ -329,9 +316,7 @@ async function render() {
 
   if (r.view === 'history') { await renderHistory(); return; }
   if (r.view === 'settings') {
-    state.mgPlan = null;   // 每次进入设置页重置编辑态，读取已保存配置
-    state.mgTl = null;
-    state.mgOrder = null;
+    state.mgTodos = null;  // 每次进入设置页重置编辑态，读取已保存配置
     renderSettings();
     return;
   }
@@ -340,151 +325,21 @@ async function render() {
   const date = r.view === 'edit' ? r.date : todayKey();
   const saved = await Store.get(date);
   state.record = saved ? normalize(saved) : blankRecord(date);
-  state.openItem = null;
   renderDayView();
 }
 
 /* ---------------- 日视图（今日 / 编辑历史） ---------------- */
-function itemSummary(rec, it) {
-  const d = rec.items[it.key];
-  if (!d) return '';
-  switch (it.type) {
-    case 'clock': return d.time ? `✓ ${d.time}` : '';
-    case 'time': return (d.bed && d.wake) ? `✓ ${d.bed} → ${d.wake}` : '';
-    case 'meal': {
-      if (!d.desc && d.stomach == null) return '';
-      const s = d.stomach != null ? `胃部：${STOMACH_OPTS[d.stomach]}` : '';
-      return `✓ ${esc(d.desc || '已记录')}${s ? ' · ' + s : ''}`;
-    }
-    case 'exercise': return d.mins ? `✓ ${d.mins} 分钟` : '';
-    case 'core': return d.mins ? `✓ ${d.mins} 分钟` : '';
-    case 'smoke': return d.count != null ? `✓ ${d.count} 支` : '';
-    case 'custom': return d.desc ? `✓ ${esc(d.desc)}` : '';
-    case 'sleep': return (d.bed && d.wake) ? `✓ ${d.bed} → ${d.wake}` : '';
-    default: return '';
-  }
-}
-
-function stomachSeg(key, current) {
-  return `<div class="stomach-seg" data-seg="${key}">
-    ${STOMACH_OPTS.map((o, i) =>
-      `<button type="button" class="${current === i ? 'on' : ''}" data-idx="${i}">${o}</button>`).join('')}
-  </div>`;
-}
-
-function itemBodyHTML(rec, it) {
-  const d = rec.items[it.key];
-  const fillBtn = `<button type="button" class="btn-fill" data-act="fill-last" data-key="${it.key}">一键填上次值</button>`;
-  switch (it.type) {
-    case 'clock':
-      return `<div class="form-row"><label>时点</label>
-        <input type="time" data-bind="items.${it.key}.time" value="${esc(d.time)}"></div>${fillBtn}`;
-    case 'time':
-      return `
-        <div class="form-row"><label>就寝时间</label>
-          <input type="time" data-bind="items.${it.key}.bed" value="${esc(d.bed)}"></div>
-        <div class="form-row"><label>起床时间</label>
-          <input type="time" data-bind="items.${it.key}.wake" value="${esc(d.wake)}"></div>${fillBtn}`;
-    case 'meal':
-      return `
-        <div class="form-col"><label>吃了什么</label>
-          <textarea data-bind="items.${it.key}.desc" placeholder="如：小米粥 + 鸡蛋">${esc(d.desc)}</textarea></div>
-        <div class="form-col"><label>胃部感受</label>${stomachSeg(it.key, d.stomach)}</div>
-        ${fillBtn}`;
-    case 'exercise':
-      return `<div class="form-row"><label>时长（分钟）</label>
-        <input type="number" min="0" data-bind="items.${it.key}.mins" value="${d.mins ?? ''}"></div>${fillBtn}`;
-    case 'core': {
-      const blocked = isCoreBlocked(rec);
-      return `
-        ${blocked ? `<div class="redline-box">腰椎抗议，今日仅限平躺和腹式呼吸。<br>
-          <span style="font-weight:400">（腰痛 ${rec.back.pain ?? 0}/10${rec.back.numb !== 'none' ? '，伴腿麻' : ''}，核心训练已锁定）</span></div>` : ''}
-        <div class="form-row"><label>时长（分钟）</label>
-          <input type="number" min="0" data-bind="items.${it.key}.mins" value="${d.mins ?? ''}" ${blocked ? 'disabled' : ''}></div>
-        ${fillBtn}`;
-    }
-    case 'smoke':
-      return `<div class="form-row"><label>今日支数</label>
-        <input type="number" min="0" data-bind="items.${it.key}.count" value="${d.count ?? ''}"></div>${fillBtn}`;
-    case 'custom':
-      return `
-        <div class="form-col"><label>记录内容</label>
-          <textarea data-bind="items.${it.key}.desc" placeholder="${esc(it.name)}打卡记录">${esc(d.desc)}</textarea></div>
-        ${fillBtn}`;
-    case 'sleep':
-      return `
-        <div class="form-row"><label>就寝时间</label>
-          <input type="time" data-bind="items.${it.key}.bed" value="${esc(d.bed)}"></div>
-        <div class="form-row"><label>起床时间</label>
-          <input type="time" data-bind="items.${it.key}.wake" value="${esc(d.wake)}"></div>${fillBtn}`;
-    default: return '';
-  }
-}
-
-/* ---------------- 统一打卡顺序（运动计划 + 时间轴混排）---------------- */
-function parseRef(r) {
-  const i = r.indexOf(':');
-  return [r.slice(0, i), r.slice(i + 1)];
-}
-
-function refItem(r) {
-  const [kind, key] = parseRef(r);
-  return kind === 'plan'
-    ? PLAN_ITEMS.find(p => p.key === key)
-    : TL_ITEMS.find(t => t.key === key);
-}
-
-/* 已保存顺序过滤失效项 + 追加新增项 */
-function effectiveOrder() {
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem('order_items') || 'null'); } catch (e) { /* ignore */ }
-  const refs = Array.isArray(saved) ? saved.filter(r => refItem(r)) : [];
-  const have = new Set(refs);
-  PLAN_ITEMS.forEach(p => { const r = 'plan:' + p.key; if (!have.has(r)) refs.push(r); });
-  TL_ITEMS.forEach(t => { const r = 'tl:' + t.key; if (!have.has(r)) refs.push(r); });
-  return refs;
-}
-
-let ORDER = effectiveOrder();
-
-/* 运动计划行 */
-function planRowHTML(rec, p, blocked) {
-  const nowLabel = currentSlotLabel();
-  const st = rec.plan[p.key] || {};
-  const cells = p.slots.map(s => {
-    const done = !!st[s.id];
-    const lock = p.core && blocked && !done;
-    const now = s.label === nowLabel;
-    const cls = ['slot-btn', done ? 'on' : '', now ? 'now' : '', lock ? 'lock' : ''].join(' ');
-    return `<button type="button" class="${cls}" data-act="plan-toggle" data-key="${p.key}" data-slot="${s.id}">${esc(s.label)}${done ? ' ✓' : ''}</button>`;
-  }).join('');
-  const rowLock = p.core && blocked;
-  return `<div class="plan-row ${rowLock ? 'blocked' : ''}">
-    <span class="plan-name">${p.name}${rowLock ? ' <span class="plan-lock-tag">锁定</span>' : ''}</span>
-    <span class="plan-cells">${cells}</span>
-  </div>`;
-}
-
-/* 时间轴打卡行 */
-function tlRowHTML(rec, it, blocked) {
-  const has = itemSummary(rec, it) !== '';
-  const isCoreBlockedItem = it.type === 'core' && blocked;
-  const cls = ['tl-item', has ? 'done' : '', isCoreBlockedItem ? 'blocked' : '',
-    state.openItem === it.key ? 'open' : ''].join(' ');
-  const summary = isCoreBlockedItem && !has
-    ? '<span class="tl-summary bad">红线锁定 · 不可打卡</span>'
-    : `<span class="tl-summary ${has ? 'ok' : ''}">${itemSummary(rec, it) || '未打卡'}</span>`;
+/* 待办清单行 */
+function todoRowHTML(rec, it) {
+  const ts = todoDoneTs(rec, it.key);
+  const time = ts ? new Date(ts) : null;
+  const timeStr = time ? `${pad(time.getHours())}:${pad(time.getMinutes())}` : '';
   return `
-    <div class="${cls}" data-item="${it.key}">
-      <div class="tl-head" data-act="toggle-item" data-key="${it.key}">
-        <span class="tl-name">${it.name}</span>
-        ${summary}
-        <span class="tl-arrow">▶</span>
-      </div>
-      <div class="tl-body" ${state.openItem === it.key ? '' : 'hidden'}>
-        ${itemBodyHTML(rec, it)}
-      </div>
-    </div>`;
+    <label class="todo-row ${ts ? 'done' : ''}" data-key="${it.key}">
+      <input type="checkbox" data-act="todo-toggle" data-key="${it.key}" ${ts ? 'checked' : ''}>
+      <span class="todo-name">${esc(it.name)}</span>
+      <span class="todo-time">${timeStr}</span>
+    </label>`;
 }
 
 function renderDayView() {
@@ -499,7 +354,6 @@ function renderDayView() {
   const waterPct = Math.min(100, Math.round((rec.water || 0) / RULES.waterGoal * 100));
   const pain = rec.back.pain == null ? null : Number(rec.back.pain);
   const painCls = pain >= 7 ? 'danger' : pain >= 4 ? 'warn' : '';
-  const blocked = isCoreBlocked(rec);
   const sys = Number(rec.vitals.sys), dia = Number(rec.vitals.dia), hr = Number(rec.vitals.hr);
   const bpCls = (sys > 160 || dia > 100) ? 'danger-v' : (sys >= 140 || dia >= 90) ? 'warn-v' : '';
   const hrCls = hr > 100 ? 'warn-v' : '';
@@ -507,14 +361,8 @@ function renderDayView() {
   const alerts = dayAlerts(rec).map(a =>
     `<div class="alert-bar ${a.level === 'danger' ? 'danger' : 'warn'}">${esc(a.text)}</div>`).join('');
 
-  /* 运动计划与时间轴合并渲染，顺序由统一顺序表决定 */
-  ORDER = effectiveOrder();
-  const combinedRows = ORDER.map(r => {
-    const [kind] = parseRef(r);
-    const it = refItem(r);
-    if (!it) return '';
-    return kind === 'plan' ? planRowHTML(rec, it, blocked) : tlRowHTML(rec, it, blocked);
-  }).join('');
+  /* 待办清单渲染 */
+  const todoRows = TODO_ITEMS.map(it => todoRowHTML(rec, it)).join('');
 
   $('#app').innerHTML = `
     ${isEdit ? `<div class="date-edit-bar"><span>正在编辑历史记录：${esc(rec.date)}</span>
@@ -577,10 +425,10 @@ function renderDayView() {
       </div>
     </div>
 
-    <div class="timeline-title">打卡与运动
-      <span class="plan-count">运动 ${planDoneSlots(rec)}/${planTotalSlots()}</span>
+    <div class="timeline-title">今日待办
+      <span class="plan-count">${todoDoneCount(rec)}/${TODO_ITEMS.length}</span>
     </div>
-    <div class="card combined-card">${combinedRows}</div>
+    <div class="card combined-card">${todoRows}</div>
   `;
 }
 
@@ -599,22 +447,17 @@ function getByPath(obj, path) {
   return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
 }
 
-/* 打卡内容非空时自动记时间戳 */
-function markTs(rec, key) {
-  const it = TL_ITEMS.find(x => x.key === key);
-  const d = rec.items[key];
-  if (!d || !it || d.ts) return;
-  let has = false;
-  switch (it.type) {
-    case 'sleep':   has = !!(d.bed && d.wake); break;
-    case 'time':    has = !!(d.bed && d.wake); break;
-    case 'clock':   has = !!d.time; break;
-    case 'smoke':   has = d.count != null; break;
-    case 'meal':    has = !!(d.desc || d.stomach != null); break;
-    case 'custom':  has = !!d.desc; break;
-    default:        has = d.mins != null;
+/* 待办打勾 / 取消 */
+function toggleTodo(key) {
+  if (!state.record) return;
+  if (state.record.todo && state.record.todo[key]) {
+    delete state.record.todo[key];
+  } else {
+    if (!state.record.todo) state.record.todo = {};
+    state.record.todo[key] = Date.now();
   }
-  if (has) d.ts = Date.now();
+  persist();
+  renderDayView();
 }
 
 document.addEventListener('input', e => {
@@ -626,123 +469,40 @@ document.addEventListener('input', e => {
   if (el.type === 'number') val = val === '' ? null : Number(val);
   setByPath(state.record, path, val);
 
-  // 打卡项填写时记录时间戳
-  const m = path.match(/^items\.(\w+)\./);
-  if (m) markTs(state.record, m[1]);
-
-  // 血糖 / 腰痛 / 腿麻变化会影响红线，需重渲染（防抖内合并）
+  // 血糖 / 腰痛 / 腿麻变化会影响红线提示，需重渲染（防抖内合并）
   if (/^(sugar\.|back\.)/.test(path)) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => { persist(); renderDayView(); }, 350);
   } else {
     persist();
-    // 更新折叠摘要，不展开状态下轻量刷新
   }
 });
 
 document.addEventListener('change', e => {
   const el = e.target;
+
+  /* ★ 待办打勾 */
+  if (el.dataset && el.dataset.act === 'todo-toggle') {
+    toggleTodo(el.dataset.key);
+    return;
+  }
+
   if (!el.dataset.bind || !state.record) return;
   setByPath(state.record, el.dataset.bind, el.value);
-  const m = el.dataset.bind.match(/^items\.(\w+)\./);
-  if (m) markTs(state.record, m[1]);
   if (/^(sugar\.|back\.)/.test(el.dataset.bind)) renderDayView();
   else persist();
 });
 
 document.addEventListener('click', async e => {
-  const t = e.target.closest('[data-act], [data-seg] button');
+  const t = e.target.closest('[data-act]');
   if (!t || !state.record) return;
-
-  /* 胃部感受分段按钮 */
-  if (t.parentElement && t.parentElement.dataset.seg) {
-    const key = t.parentElement.dataset.seg;
-    const idx = Number(t.dataset.idx);
-    state.record.items[key].stomach = state.record.items[key].stomach === idx ? null : idx;
-    markTs(state.record, key);
-    persist();
-    renderDayView();
-    return;
-  }
-
   const act = t.dataset.act;
-
-  /* ★ 运动计划打卡：core 类动作受腰痛红线拦截 */
-  if (act === 'plan-toggle') {
-    const key = t.dataset.key, slot = t.dataset.slot;
-    const item = PLAN_ITEMS.find(x => x.key === key);
-    if (!item || !state.record) return;
-    if (!state.record.plan[key]) state.record.plan[key] = {};
-    const st = state.record.plan[key];
-    if (st[slot]) { delete st[slot]; persist(); renderDayView(); return; }  // 再点一次撤销
-    if (item.core && isCoreBlocked(state.record)) {
-      showModal({
-        title: '腰椎抗议，今日仅限平躺和腹式呼吸',
-        danger: true,
-        html: `当前腰痛评分 <b>${state.record.back.pain ?? 0}/10</b>${state.record.back.numb !== 'none' ? '，且伴有腿麻' : ''}。<br>
-               死虫式、鸟狗式、臀桥等核心动作今日已锁定。<br>
-               八段锦和站桩不受影响，可以照常练习。`,
-        buttons: [{ label: '知道了', cls: 'btn-primary' }]
-      });
-      return;
-    }
-    st[slot] = Date.now();
-    persist();
-    renderDayView();
-    return;
-  }
-
-  if (act === 'toggle-item') {
-    const key = t.dataset.key;
-    /* ★ 红线拦截：腰痛≥7 或有腿麻 → 核心训练打卡弹窗拦截 */
-    if (key === 'core' && isCoreBlocked(state.record) && !state.record.items.core.mins) {
-      showModal({
-        title: '腰椎抗议，今日仅限平躺和腹式呼吸',
-        danger: true,
-        html: `当前腰痛评分 <b>${state.record.back.pain ?? 0}/10</b>${state.record.back.numb !== 'none' ? '，且伴有腿麻' : ''}。<br>
-               为避免加重腰椎负担，今日核心训练已被锁定。<br>
-               建议改为：平躺休息 10-20 分钟 + 腹式呼吸，疼痛持续或加重请及时就医。`,
-        buttons: [{ label: '知道了', cls: 'btn-primary' }]
-      });
-      return;
-    }
-    state.openItem = state.openItem === key ? null : key;
-    renderDayView();
-    return;
-  }
 
   if (act === 'water') {
     state.record.water = (Number(state.record.water) || 0) + Number(t.dataset.ml);
     persist();
     renderDayView();
     return;
-  }
-
-  if (act === 'fill-last') {
-    const key = t.dataset.key;
-    const all = (await Store.all())
-      .filter(r => r.date !== state.record.date && r.items && r.items[key])
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-    const prev = all.find(r => {
-      const d = r.items[key];
-      if (!d) return false;
-      const it = TL_ITEMS.find(x => x.key === key);
-      return key === 'sleep' ? (d.bed && d.wake)
-        : key === 'wake' ? d.time
-        : (it && (it.type === 'time' || it.type === 'sleep')) ? (d.bed && d.wake)
-        : (it && it.type === 'clock') ? d.time
-        : key === 'smoke' ? d.count != null
-        : ['breakfast', 'lunch', 'dinner', 'snack'].includes(key) ? (d.desc || d.stomach != null)
-        : (it && it.type === 'custom') ? !!d.desc
-        : d.mins != null;
-    });
-    if (!prev) { toast('没有找到上次记录'); return; }
-    const src = prev.items[key];
-    state.record.items[key] = JSON.parse(JSON.stringify(src));
-    delete state.record.items[key].ts;
-    persist();
-    renderDayView();
-    toast('已填入上次值');
   }
 });
 
@@ -766,11 +526,8 @@ async function renderHistory() {
       chips.push(`<span class="chip ${bad ? 'bad' : ''}">腰痛 ${r.back.pain}</span>`);
     }
     if (r.smoke != null) chips.push(`<span class="chip">烟 ${r.smoke}支</span>`);
-    const exMin = ['walk']
-      .reduce((s, k) => s + (Number(r.items[k] && r.items[k].mins) || 0), 0);
-    if (exMin) chips.push(`<span class="chip">快走 ${exMin}min</span>`);
-    const planDone = planDoneSlots(r);
-    if (planDone) chips.push(`<span class="chip ${planDone >= planTotalSlots(r) ? 'ok' : ''}">计划 ${planDone}/${planTotalSlots(r)}</span>`);
+    const done = todoDoneCount(r);
+    if (done) chips.push(`<span class="chip ${done >= TODO_ITEMS.length ? 'ok' : ''}">待办 ${done}/${TODO_ITEMS.length}</span>`);
     const vv = r.vitals || {};
     if (vv.weight != null) chips.push(`<span class="chip">体重 ${vv.weight}kg</span>`);
     if (vv.sys != null && vv.dia != null) {
@@ -794,7 +551,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------------- OSS 云同步（拉取合并 / 上传） ---------------- */
-const APP_VERSION = 'v1.1 · build 16';
+const APP_VERSION = 'v1.2 · build 17';
 
 function syncStatusText() {
   if (!getOSS().putUrl) return '未配置';
@@ -862,10 +619,8 @@ function applyConfigSnapshot(cfg, force) {
     localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
   });
   localStorage.setItem('config_updated_at', String(cloudTs || Date.now()));
-  /* 重新装载内存中的打卡项定义与顺序 */
-  PLAN_ITEMS = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
-  TL_ITEMS = loadItems('tl_items', DEFAULT_TL_ITEMS);
-  ORDER = effectiveOrder();
+  /* 重新装载内存中的待办定义 */
+  TODO_ITEMS = loadTodoItems();
   return true;
 }
 
@@ -937,97 +692,39 @@ function scheduleAutoUpload() {
 
 /* ---------------- 设置视图 ---------------- */
 
-/* 时间轴可选类型 */
-const TL_TYPE_OPTIONS = [
-  ['custom', '文本'],
-  ['clock', '时点'],
-  ['time', '就寝+起床'],
-  ['meal', '餐食'],
-  ['exercise', '分钟'],
-  ['smoke', '数值']
-];
-
 /* 重渲染前把输入框里未保存的名称回写到编辑态，避免丢失 */
 function syncMgNamesFromDom() {
   document.querySelectorAll('.mg-name').forEach(inp => {
-    const kind = inp.dataset.kind;
-    const key = parseRef(inp.dataset.ref)[1];
-    const list = kind === 'plan' ? state.mgPlan : state.mgTl;
-    const item = list && list.find(x => x.key === key);
+    const key = inp.dataset.key;
+    const item = state.mgTodos && state.mgTodos.find(x => x.key === key);
     if (item) {
       const v = inp.value.trim();
       if (v) item.name = v;
     }
   });
-  /* 同步每次打卡的自定义名称 */
-  document.querySelectorAll('.mg-slot-input').forEach(inp => {
-    const item = mgItem(inp.dataset.ref);
-    if (!item) return;
-    const s = item.slots.find(x => x.id === inp.dataset.slot);
-    if (s) {
-      const v = inp.value.trim();
-      if (v) s.label = v;
-    }
-  });
 }
 
-/* 从编辑态中取出某一项 */
-function mgItem(ref) {
-  const [kind, key] = parseRef(ref);
-  const list = kind === 'plan' ? state.mgPlan : state.mgTl;
-  return list ? list.find(x => x.key === key) : null;
-}
-
-function mgMoveHTML(ref) {
-  return `<span class="mg-move-group">
-    <button type="button" class="mg-move" data-act="mg-move" data-ref="${ref}" data-dir="-1" title="上移">↑</button>
-    <button type="button" class="mg-move" data-act="mg-move" data-ref="${ref}" data-dir="1" title="下移">↓</button>
-  </span>`;
-}
-
-function mgRowHTML(ref) {
-  const [kind] = parseRef(ref);
-  const item = mgItem(ref);
-  if (!item) return '';
-  const delBtn = `<button type="button" class="mg-del" data-act="mg-del" data-ref="${ref}">×</button>`;
-  if (kind === 'plan') {
-    const slotChips = item.slots.map(s => `
-      <span class="mg-slot">
-        <input type="text" class="mg-slot-input" data-ref="${ref}" data-slot="${s.id}" value="${esc(s.label)}" title="这一次打卡的名称">
-        <button type="button" class="mg-slot-del" data-act="mg-slot-del" data-ref="${ref}" data-slot="${s.id}" title="删除这一次">×</button>
-      </span>`).join('');
-    return `<div class="mg-row">
-      <input type="text" class="mg-name" data-kind="plan" data-ref="${ref}" value="${esc(item.name)}">
-      <span class="mg-ctrls">
-        ${slotChips}
-        <button type="button" class="slot-btn-sm" data-act="mg-slot-add" data-ref="${ref}" title="增加一次打卡">+ 次数</button>
-        <button type="button" class="slot-btn-sm ${item.core ? 'on' : ''}" data-act="mg-core" data-ref="${ref}" title="核心动作，腰痛红线时锁定">核心</button>
-      </span>
-      ${mgMoveHTML(ref)}${delBtn}
-    </div>`;
-  }
+function mgRowHTML(item, idx) {
   return `<div class="mg-row">
-    <input type="text" class="mg-name" data-kind="tl" data-ref="${ref}" value="${esc(item.name)}">
-    <select class="mg-type-sel" data-ref="${ref}" title="打卡类型">
-      ${TL_TYPE_OPTIONS.map(([v, l]) => `<option value="${v}" ${item.type === v ? 'selected' : ''}>${l}</option>`).join('')}
-    </select>
-    ${mgMoveHTML(ref)}${delBtn}
+    <input type="text" class="mg-name" data-key="${item.key}" value="${esc(item.name)}">
+    <span class="mg-move-group">
+      <button type="button" class="mg-move" data-act="mg-move" data-idx="${idx}" data-dir="-1" title="上移">↑</button>
+      <button type="button" class="mg-move" data-act="mg-move" data-idx="${idx}" data-dir="1" title="下移">↓</button>
+    </span>
+    <button type="button" class="mg-del" data-act="mg-del" data-idx="${idx}" title="删除">×</button>
   </div>`;
 }
 
 function renderSettings() {
   /* 仅在进入设置页时初始化编辑态，重渲染时保留未保存的改动 */
-  if (!state.mgPlan) state.mgPlan = loadItems('plan_items', DEFAULT_PLAN_ITEMS);
-  if (!state.mgTl) state.mgTl = loadItems('tl_items', DEFAULT_TL_ITEMS);
-  if (!state.mgOrder) state.mgOrder = effectiveOrder();
+  if (!state.mgTodos) state.mgTodos = loadTodoItems();
   $('#app').innerHTML = `
-    <div class="section-title">打卡项目管理</div>
+    <div class="section-title">待办事项管理</div>
     <div class="card">
-      <div id="mg-all">${state.mgOrder.map(mgRowHTML).join('')}</div>
-      <button class="btn-block" data-act="mg-add" data-kind="plan">+ 添加运动动作</button>
-      <button class="btn-block" data-act="mg-add" data-kind="tl">+ 添加打卡项目</button>
+      <div id="mg-all">${state.mgTodos.map(mgRowHTML).join('')}</div>
+      <button class="btn-block" data-act="mg-add">+ 添加待办事项</button>
       <button class="btn-block btn-primary" data-act="mg-save">保存并应用</button>
-      <p class="hint">列表顺序即打卡页显示顺序，用 ↑↓ 调整。每个运动动作可自定义打卡次数与名称（如 早/中/晚，或 第1次/第2次，或 10:00/16:00），点「+ 次数」增加、次数框右侧「×」删除；勾「核心」的动作在腰痛 ≥7 或腿麻时自动锁定。打卡项目可下拉选择类型：文本 / 时点 / 就寝+起床 / 餐食 / 分钟 / 数值。</p>
+      <p class="hint">列表顺序即今日页显示顺序，用 ↑↓ 调整，「×」删除（历史记录保留）。待办事项打勾即完成，无需填写内容。</p>
     </div>
 
     <div class="section-title">数据备份</div>
@@ -1077,17 +774,10 @@ document.addEventListener('click', async e => {
 
   if (act === 'pick-import') { $('#import-file').click(); return; }
 
-  /* ---- 打卡项目管理（运动计划 + 打卡项统一管理）---- */
+  /* ---- 待办事项管理 ---- */
   if (act === 'mg-add') {
     syncMgNamesFromDom();
-    const key = 'c' + Date.now();
-    if (t.dataset.kind === 'plan') {
-      state.mgPlan.push({ key, name: '新动作', slots: [{ id: 's' + Date.now(), label: '第1次' }], core: false });
-      state.mgOrder.push('plan:' + key);
-    } else {
-      state.mgTl.push({ key, name: '新项目', type: 'custom' });
-      state.mgOrder.push('tl:' + key);
-    }
+    state.mgTodos.push({ key: 'c' + Date.now(), name: '新待办' });
     renderSettings();
     toast('已添加，改完记得点保存');
     return;
@@ -1095,66 +785,27 @@ document.addEventListener('click', async e => {
 
   if (act === 'mg-del') {
     syncMgNamesFromDom();
-    const ref = t.dataset.ref;
-    const [kind, key] = parseRef(ref);
-    const list = kind === 'plan' ? state.mgPlan : state.mgTl;
-    if (list.length <= 1) { toast('至少保留一项'); return; }
-    state.mgOrder = state.mgOrder.filter(r => r !== ref);
-    const i = list.findIndex(x => x.key === key);
-    if (i >= 0) list.splice(i, 1);
+    const idx = Number(t.dataset.idx);
+    if (state.mgTodos.length <= 1) { toast('至少保留一项'); return; }
+    state.mgTodos.splice(idx, 1);
     renderSettings();
     return;
   }
 
   if (act === 'mg-move') {
     syncMgNamesFromDom();
-    const ref = t.dataset.ref;
-    const i = state.mgOrder.indexOf(ref);
+    const i = Number(t.dataset.idx);
     const j = i + Number(t.dataset.dir);
-    if (i < 0 || j < 0 || j >= state.mgOrder.length) return;
-    [state.mgOrder[i], state.mgOrder[j]] = [state.mgOrder[j], state.mgOrder[i]];
-    renderSettings();
-    return;
-  }
-
-  if (act === 'mg-slot-add') {
-    syncMgNamesFromDom();
-    const item = mgItem(t.dataset.ref);
-    if (!item) return;
-    const n = item.slots.length + 1;
-    item.slots.push({ id: 's' + Date.now(), label: '第' + n + '次' });
-    renderSettings();
-    toast('已增加一次，可修改名称');
-    return;
-  }
-
-  if (act === 'mg-slot-del') {
-    syncMgNamesFromDom();
-    const item = mgItem(t.dataset.ref);
-    if (!item) return;
-    if (item.slots.length <= 1) { toast('至少保留一次'); return; }
-    item.slots = item.slots.filter(x => x.id !== t.dataset.slot);
-    renderSettings();
-    return;
-  }
-
-  if (act === 'mg-core') {
-    syncMgNamesFromDom();
-    const item = mgItem(t.dataset.ref);
-    if (!item) return;
-    item.core = !item.core;
+    if (j < 0 || j >= state.mgTodos.length) return;
+    [state.mgTodos[i], state.mgTodos[j]] = [state.mgTodos[j], state.mgTodos[i]];
     renderSettings();
     return;
   }
 
   if (act === 'mg-save') {
     syncMgNamesFromDom();
-    localStorage.setItem('plan_items', JSON.stringify(state.mgPlan));
-    localStorage.setItem('tl_items', JSON.stringify(state.mgTl));
-    localStorage.setItem('order_items', JSON.stringify(state.mgOrder));
-    PLAN_ITEMS = state.mgPlan;
-    TL_ITEMS = state.mgTl;
-    ORDER = effectiveOrder();
+    localStorage.setItem('todo_items', JSON.stringify(state.mgTodos));
+    TODO_ITEMS = state.mgTodos;
     markConfigChanged();
     toast('已保存并应用，正在同步到云端');
     renderSettings();
@@ -1191,15 +842,6 @@ async function importRecords(data) {
 }
 
 document.addEventListener('change', e => {
-  /* 打卡项目类型切换 */
-  if (e.target.classList.contains('mg-type-sel')) {
-    const item = mgItem(e.target.dataset.ref);
-    if (item) {
-      item.type = e.target.value;
-      toast('已切换类型，保存后生效');
-    }
-    return;
-  }
   if (e.target.id !== 'import-file' || !e.target.files.length) return;
   const file = e.target.files[0];
   const reader = new FileReader();

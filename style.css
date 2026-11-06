@@ -275,6 +275,27 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 /* ============ 合并打卡卡片（运动计划 + 时间轴） ============ */
 .combined-card { padding: 2px 14px; }
+
+/* ============ 待办清单 ============ */
+.todo-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--line);
+  cursor: pointer;
+  user-select: none;
+}
+.todo-row:last-child { border-bottom: none; }
+.todo-row input[type="checkbox"] {
+  width: 20px; height: 20px;
+  accent-color: var(--green);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.todo-name { font-weight: 600; font-size: 15px; }
+.todo-row.done .todo-name { color: var(--text-sub); text-decoration: line-through; }
+.todo-time { margin-left: auto; font-size: 12px; color: var(--text-sub); }
 .combined-card .tl-item {
   box-shadow: none;
   margin: 0;
